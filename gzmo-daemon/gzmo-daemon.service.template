@@ -4,12 +4,15 @@ After=network.target
 
 [Service]
 Type=simple
-# ── Paths: adjust to match your system layout ──
-# The defaults below assume edge-node is at ~/Dokumente/Playground/DevStack_v2/edge-node
 User=%u
-WorkingDirectory=%h/Dokumente/Playground/DevStack_v2/edge-node/gzmo-daemon
-EnvironmentFile=%h/Dokumente/Playground/DevStack_v2/edge-node/gzmo-daemon/.env
-ExecStart=%h/.bun/bin/bun run index.ts
+# This file is a TEMPLATE. Install it using `./install_service.sh`.
+#
+# The installer replaces:
+# - __GZMO_DAEMON_DIR__ (absolute path to `gzmo-daemon/`)
+# - __BUN_BIN__ (bun executable path)
+WorkingDirectory=__GZMO_DAEMON_DIR__
+EnvironmentFile=__GZMO_DAEMON_DIR__/.env
+ExecStart=__BUN_BIN__ run index.ts
 Restart=on-failure
 RestartSec=10
 

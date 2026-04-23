@@ -211,6 +211,27 @@ The daemon will keep running its heartbeat/logging even if Ollama is down, but i
 - `vault/`: example/default vault layout (includes `vault/GZMO/Inbox/`)
 - `assets/`: optional screenshots/GIFs for GitHub
 - `docs/`: deeper documentation (optional)
+- `install_service.sh`: installs a portable systemd user service (Linux)
+
+[Back to top](#top)
+
+---
+
+## 🖥️ Auto-start (systemd, Linux)
+
+This installs a **user** service (no sudo) and writes a machine-local unit file so there are no hardcoded “bullshit paths” in the repo.
+
+```bash
+./install_service.sh
+systemctl --user daemon-reload
+systemctl --user enable --now gzmo-daemon
+```
+
+Follow logs:
+
+```bash
+journalctl --user -u gzmo-daemon -f
+```
 
 [Back to top](#top)
 
