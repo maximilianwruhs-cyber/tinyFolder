@@ -13,6 +13,10 @@
 **/.env
 **/.env.*
 
+# vault generated / raw imports (can contain secrets)
+vault/GZMO/embeddings.json
+vault/raw/
+
 # OS / editor
 .DS_Store
 .idea/
