@@ -67,6 +67,23 @@ ollama pull nomic-embed-text
 bun run summon
 ```
 
+### Safe mode (profiles)
+
+If you want to debug/tune on weak hardware, you can run with a safe-mode profile:
+
+```bash
+cd gzmo-daemon
+
+# Only chaos + Live_Stream (no watcher, no embeddings, no LLM)
+GZMO_PROFILE=heartbeat bun run summon
+
+# Inbox watcher + task processing (no embeddings, no autonomy loops)
+GZMO_PROFILE=minimal bun run summon
+
+# Tasks + embeddings (no dreams/self-ask/wiki/ingest)
+GZMO_PROFILE=standard bun run summon
+```
+
 [Back to top](#top)
 
 ---
@@ -88,6 +105,41 @@ Explain the Lorenz attractor in one paragraph.
 ```
 
 Save the file. The daemon will claim it, run, and append output.
+
+### Task actions (frontmatter routing)
+
+Control the daemon by dropping markdown files with these YAML headers into the Inbox:
+
+#### `action: think`
+
+```yaml
+---
+status: pending
+action: think
+---
+Explain the Lorenz attractor.
+```
+
+#### `action: search`
+
+```yaml
+---
+status: pending
+action: search
+---
+Based on your logs, why did your tension drop yesterday?
+```
+
+#### `action: chain`
+
+```yaml
+---
+status: pending
+action: chain
+chain_next: summarize_step2.md
+---
+List exactly 3 components of the chaos engine.
+```
 
 [Back to top](#top)
 
