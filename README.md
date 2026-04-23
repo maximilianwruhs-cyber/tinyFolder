@@ -1,6 +1,6 @@
 <a name="top"></a>
 
-<h1 align="center">tinyFolder</h1>
+<h1 align="center">📁 tinyFolder</h1>
 
 <p align="center">
   <strong>A local-first, filesystem-driven AI daemon for Markdown/Obsidian vaults (Bun + Ollama).</strong>
