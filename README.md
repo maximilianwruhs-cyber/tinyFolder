@@ -16,7 +16,7 @@
 
 ---
 
-## Overview
+## 👻 Overview
 
 `tinyFolder` looks like “just a folder”, but it contains **GZMO**: a daemon that watches a vault inbox, runs local inference, and writes results back into the same Markdown files.
 
@@ -24,7 +24,7 @@ You don’t use a chat UI. You **drop Markdown tasks into an inbox folder** and 
 
 If you want screenshots/GIFs in the README, add them to `assets/` and link them here.
 
-### Highlights
+### ✨ Highlights
 
 - **Local-first**: everything is files on disk (no cloud DB required).
 - **Vault RAG**: indexes your vault into embeddings for grounded answers.
@@ -33,7 +33,7 @@ If you want screenshots/GIFs in the README, add them to `assets/` and link them 
 
 ---
 
-## Table of contents
+## 🧭 Table of contents
 
 - [Quick start](#quick-start)
 - [How to use (drop a task file)](#how-to-use-drop-a-task-file)
@@ -46,14 +46,14 @@ If you want screenshots/GIFs in the README, add them to `assets/` and link them 
 
 ---
 
-## Quick start
+## 🚀 Quick start
 
-### Prerequisites
+### ✅ Prerequisites
 
 - **Bun** installed (TypeScript runtime)
 - **Ollama** installed and running locally
 
-### Install + run
+### ⚡ Install + run
 
 ```bash
 # 1) Install dependencies
@@ -74,7 +74,7 @@ ollama pull nomic-embed-text
 bun run summon
 ```
 
-### Safe mode (profiles)
+### 🛟 Safe mode (profiles)
 
 If you want to debug/tune on weak hardware, you can run with a safe-mode profile:
 
@@ -95,7 +95,7 @@ GZMO_PROFILE=standard bun run summon
 
 ---
 
-## How to use (drop a task file)
+## 📨 How to use (drop a task file)
 
 Tasks are Markdown files with YAML frontmatter. The daemon watches:
 
@@ -113,7 +113,7 @@ Explain the Lorenz attractor in one paragraph.
 
 Save the file. The daemon will claim it, run, and append output.
 
-### Task actions (frontmatter routing)
+### 🧩 Task actions (frontmatter routing)
 
 Control the daemon by dropping markdown files with these YAML headers into the Inbox:
 
@@ -152,7 +152,7 @@ List exactly 3 components of the chaos engine.
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
 GZMO reads environment variables (via `./.env` if you use one):
 
@@ -179,7 +179,7 @@ Optional overrides (all `0/1`, `false/true` supported):
 
 ---
 
-## Troubleshooting
+## 🧯 Troubleshooting
 
 ### Sanity check your setup
 
@@ -205,7 +205,7 @@ The daemon will keep running its heartbeat/logging even if Ollama is down, but i
 
 ---
 
-## Repo layout
+## 🗂️ Repo layout
 
 - `gzmo-daemon/`: the Bun/TypeScript daemon (entrypoint: `gzmo-daemon/index.ts`)
 - `vault/`: example/default vault layout (includes `vault/GZMO/Inbox/`)
@@ -216,7 +216,7 @@ The daemon will keep running its heartbeat/logging even if Ollama is down, but i
 
 ---
 
-## Architecture (at a glance)
+## 🧠 Architecture (at a glance)
 
 ```mermaid
 flowchart TD
@@ -233,11 +233,11 @@ flowchart TD
 
 ---
 
-## Contributing
+## 🤝 Contributing
 
 See `CONTRIBUTING.md`.
 
-## License
+## 📄 License
 
 MIT — see `LICENSE`.
 
