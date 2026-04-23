@@ -1,0 +1,10 @@
+# GZMO Edge Node — Native Bun Configuration
+# Optimized for high-inference environment with tight memory constraints.
+
+smol = true # Force aggressive garbage collection to prevent memory ballooning alongside Ollama
+
+[install]
+exact = true # No semantic versioning drift; deterministic pinning
+
+[test]
+randomize = true # Expose flaky state mutations during engine validation

@@ -1,0 +1,27 @@
+[
+  {
+    "task": "_test_think",
+    "summary": "I am GZMO, a sovereign local AI daemon running on this machine. My current phase is T:32 E:100% idle V:+0.04, indicating",
+    "time": "2026-04-22T10:21:39.581Z"
+  },
+  {
+    "task": "_test_search",
+    "summary": "Based on the Vault context provided, I have the following information regarding the chaos engine and alostasis system:",
+    "time": "2026-04-22T10:21:45.236Z"
+  },
+  {
+    "task": "_stress_01_identity",
+    "summary": "1. My name is GZMO.",
+    "time": "2026-04-22T10:22:19.406Z"
+  },
+  {
+    "task": "_stress_02_rag",
+    "summary": "Based on my analysis of the available data in the Vault, I have found several relevant documents that provide informatio",
+    "time": "2026-04-22T10:22:33.648Z"
+  },
+  {
+    "task": "_stress_04_chain",
+    "summary": "Here are three technical components of the GZMO daemon architecture:",
+    "time": "2026-04-22T10:22:38.567Z"
+  }
+]

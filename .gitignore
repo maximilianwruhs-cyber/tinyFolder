@@ -13,9 +13,6 @@
 **/.env
 **/.env.*
 
-# local vault / knowledge base (don’t publish by default)
-vault/
-
 # OS / editor
 .DS_Store
 .idea/

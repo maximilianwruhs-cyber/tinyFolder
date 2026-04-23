@@ -50,7 +50,6 @@ You don’t use a chat UI. You **drop Markdown tasks into an inbox folder** and 
 
 ```bash
 # 1) Install dependencies
-cd gzmo
 bun install
 
 # 2) Configure (optional)
@@ -95,7 +94,7 @@ Save the file. The daemon will claim it, run, and append output.
 
 ## Configuration
 
-GZMO reads environment variables (via `gzmo/.env` if you use one):
+GZMO reads environment variables (via `./.env` if you use one):
 
 - **`VAULT_PATH`**: absolute path to your vault. If not set, defaults to this repo’s `./vault`.
 - **`OLLAMA_URL`**: Ollama base URL (default `http://localhost:11434`).
@@ -127,14 +126,12 @@ Optional overrides (all `0/1`, `false/true` supported):
 Run the built-in doctor:
 
 ```bash
-cd gzmo
 bun run doctor
 ```
 
 If you want the doctor to run write-enabled pipeline checks (it will create temporary inbox tasks), run:
 
 ```bash
-cd gzmo
 bun run doctor --write --profile deep
 ```
 
@@ -148,7 +145,7 @@ The daemon will keep running its heartbeat/logging even if Ollama is down, but i
 
 ## Repo layout
 
-- `gzmo/`: the Bun/TypeScript daemon (entrypoint: `gzmo/index.ts`)
+- `src/`: the Bun/TypeScript daemon sources (entrypoint: `index.ts`)
 - `vault/`: example/default vault layout (includes `vault/GZMO/Inbox/`)
 
 [Back to top](#top)
