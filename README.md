@@ -3,10 +3,12 @@
 <h1 align="center">tinyFolder</h1>
 
 <p align="center">
-  <strong>The most minimalistic autonomous AI “OS” — a local-first daemon that lives inside a plain Markdown vault.</strong>
+  <strong>A local-first, filesystem-driven AI daemon for Markdown/Obsidian vaults (Bun + Ollama).</strong>
 </p>
 
 <p align="center">
+  <a href="https://github.com/maximilianwruhs-cyber/tinyFolder/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/maximilianwruhs-cyber/tinyFolder/ci.yml?branch=main&style=flat-square"></a>
+  <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-10b981?style=flat-square"></a>
   <a href="https://img.shields.io/badge/runtime-Bun-000000?style=flat-square&logo=bun"><img alt="Runtime: Bun" src="https://img.shields.io/badge/runtime-Bun-000000?style=flat-square&logo=bun"></a>
   <a href="https://img.shields.io/badge/LLM-Ollama-000000?style=flat-square"><img alt="LLM: Ollama" src="https://img.shields.io/badge/LLM-Ollama-000000?style=flat-square"></a>
   <a href="https://img.shields.io/badge/storage-Markdown%20files-0969DA?style=flat-square"><img alt="Storage: Markdown files" src="https://img.shields.io/badge/storage-Markdown%20files-0969DA?style=flat-square"></a>
@@ -16,9 +18,11 @@
 
 ## Overview
 
-`tinyFolder` is a repo that looks like “just a folder”, but contains **GZMO**: an autonomous, filesystem-driven AI daemon.
+`tinyFolder` looks like “just a folder”, but it contains **GZMO**: a daemon that watches a vault inbox, runs local inference, and writes results back into the same Markdown files.
 
 You don’t use a chat UI. You **drop Markdown tasks into an inbox folder** and the daemon reads them, routes them by YAML frontmatter (`action: think | search | chain`), writes answers back into the same files, and continues running in the background.
+
+If you want screenshots/GIFs in the README, add them to `assets/` and link them here.
 
 ### Highlights
 
@@ -35,7 +39,10 @@ You don’t use a chat UI. You **drop Markdown tasks into an inbox folder** and 
 - [How to use (drop a task file)](#how-to-use-drop-a-task-file)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
+- [Architecture (at a glance)](#architecture-at-a-glance)
 - [Repo layout](#repo-layout)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
@@ -202,6 +209,35 @@ The daemon will keep running its heartbeat/logging even if Ollama is down, but i
 
 - `gzmo-daemon/`: the Bun/TypeScript daemon (entrypoint: `gzmo-daemon/index.ts`)
 - `vault/`: example/default vault layout (includes `vault/GZMO/Inbox/`)
+- `assets/`: optional screenshots/GIFs for GitHub
+- `docs/`: deeper documentation (optional)
 
 [Back to top](#top)
+
+---
+
+## Architecture (at a glance)
+
+```mermaid
+flowchart TD
+  Inbox["vault/GZMO/Inbox/*.md"] --> Watcher["gzmo-daemon watcher"]
+  Watcher --> Router["frontmatter router (think/search/chain)"]
+  Router -->|think| LLM["Ollama (local)"]
+  Router -->|search| RAG["Embeddings + vector search"]
+  Router --> Writer["Append answer to same .md"]
+  RAG --> Writer
+  LLM --> Writer
+```
+
+[Back to top](#top)
+
+---
+
+## Contributing
+
+See `CONTRIBUTING.md`.
+
+## License
+
+MIT — see `LICENSE`.
 
