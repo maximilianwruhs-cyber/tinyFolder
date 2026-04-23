@@ -24,10 +24,11 @@ You don't chat with `tinyFolder` through a shiny web UI. You interact with it ex
 
 ```bash
 # 1. Install dependencies
+cd gzmo-daemon
 bun install
 
 # 2. Rename config (optional)
-cp .env.example .env
+cp ../.env.example .env
 
 # 3. Start your local Ollama server
 OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_FLASH_ATTENTION=1 OLLAMA_KEEP_ALIVE=-1 ollama serve
@@ -56,7 +57,7 @@ GZMO_PROFILE=minimal bun run summon
 GZMO_PROFILE=standard bun run summon
 ```
 
-You can also override individual subsystems via env vars (see `./.env.example`).
+You can also override individual subsystems via env vars (see `../.env.example`).
 
 ---
 
