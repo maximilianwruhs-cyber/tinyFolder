@@ -24,7 +24,7 @@ You don't chat with `tinyFolder` through a shiny web UI. You interact with it ex
 
 ```bash
 # 1. Install dependencies
-cd gzmo && bun install
+bun install
 
 # 2. Rename config (optional)
 cp .env.example .env
@@ -56,7 +56,7 @@ GZMO_PROFILE=minimal bun run summon
 GZMO_PROFILE=standard bun run summon
 ```
 
-You can also override individual subsystems via env vars (see `gzmo/.env.example`).
+You can also override individual subsystems via env vars (see `./.env.example`).
 
 ---
 
