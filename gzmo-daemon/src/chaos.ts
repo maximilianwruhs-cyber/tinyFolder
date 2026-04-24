@@ -118,5 +118,3 @@ export class LogisticMap {
     this.val = clamp((this.val + normalized) / 2.0, 0.01, 0.99);
   }
 }
-
-

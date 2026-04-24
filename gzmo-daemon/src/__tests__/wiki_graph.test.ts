@@ -23,4 +23,3 @@ describe("wiki_graph", () => {
     expect(out.match(/\[\[source-foo\]\]/g)?.length).toBe(1);
   });
 });
-

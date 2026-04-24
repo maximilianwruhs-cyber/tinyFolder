@@ -1,12 +1,12 @@
 /**
  * test_full_pipeline.ts — Comprehensive E2E Pipeline Test
- * 
+ *
  * Tests EVERY pipeline step of the GZMO daemon:
  *   1. Task Processing (think action) — basic inference
  *   2. Task Processing (search action) — vault RAG
  *   3. Dream Engine — distill completed task
  *   4. Self-Ask Engine — gap detective, contradiction scanner, spaced repetition
- * 
+ *
  * For each step: validates completion, measures time, and outputs content for quality review.
  */
 
@@ -48,7 +48,7 @@ function gradeOutput(output: string): { quality: string; issues: string[] } {
   if (output.length < 20) issues.push("Output too short");
   if (output.length > 5000) issues.push("Output suspiciously long");
   if (/^(Okay|Hmm|I think|Let me|I recall|The user)/m.test(output)) issues.push("Leaked reasoning");
-  
+
   if (issues.length === 0) return { quality: "✅ CLEAN", issues: [] };
   if (issues.some(i => i.includes("hallucination") || i.includes("garbage"))) return { quality: "❌ BAD", issues };
   return { quality: "⚠️ WARN", issues };

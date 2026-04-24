@@ -337,7 +337,7 @@ export class SelfAskEngine {
         const dreamFiles = entries
             .filter(e => e.isFile() && e.name.endsWith(".md"))
             .map(e => path.join(cabinetDir, e.name));
-        
+
         for (const df of dreamFiles) {
             const stat = await fsp.stat(df);
             if (stat.mtimeMs > cutoff) {

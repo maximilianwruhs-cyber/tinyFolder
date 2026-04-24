@@ -135,13 +135,14 @@ export class TriggerEngine {
       }
     }
 
+    // Clone to prevent shared references if snap is mutated externally
     this.prevSnapshot = { ...snap };
     return fired;
   }
 
   private shouldFire(trigger: ChaosTrigger, snap: ChaosSnapshot): boolean {
     if (!trigger.enabled) return false;
-    if (snap.tick - trigger.lastFired < trigger.cooldownTicks) return false;
+    if (trigger.lastFired > 0 && (snap.tick - trigger.lastFired < trigger.cooldownTicks)) return false;
 
     const prev = this.prevSnapshot;
 

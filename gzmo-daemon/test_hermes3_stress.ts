@@ -1,6 +1,6 @@
 /**
  * test_hermes3_stress.ts — Ultimate Hermes3:8b Stress Test
- * 
+ *
  * 8-stage gauntlet testing every subsystem of the GZMO daemon:
  *   1. Identity & System Prompt Compliance
  *   2. RAG-Grounded Vault Search (embedding retrieval)
@@ -10,7 +10,7 @@
  *   6. Self-Ask Engine (gap detective + contradiction scanner)
  *   7. Wiki Engine (autonomous knowledge consolidation + self-documentation)
  *   8. Chaos Engine State Integrity (mutation tracking)
- * 
+ *
  * Grades output quality, measures latency, detects hallucinations.
  */
 
@@ -49,7 +49,7 @@ const results: TestResult[] = [];
 // ── Output Grader ───────────────────────────────────────────
 function gradeOutput(output: string, extraChecks?: { mustContain?: string[]; mustNotContain?: string[] }): { quality: string; issues: string[] } {
   const issues: string[] = [];
-  
+
   // Universal checks
   if (output.includes("\\boxed")) issues.push("LaTeX garbage");
   if (/<\/think(ing)?>/.test(output)) issues.push("Leaked think tags");
@@ -58,7 +58,7 @@ function gradeOutput(output: string, extraChecks?: { mustContain?: string[]; mus
   if (output.length < 20) issues.push("Output too short (<20 chars)");
   if (output.length > 8000) issues.push("Output suspiciously long (>8k)");
   if (/^(Okay|Hmm|I think|Let me|I recall|The user)/m.test(output)) issues.push("Leaked internal reasoning");
-  
+
   // Custom checks
   if (extraChecks?.mustContain) {
     for (const term of extraChecks.mustContain) {

@@ -332,5 +332,3 @@ function deriveMaxTokens(z: number): number {
 function deriveValence(y: number): number {
   return clamp(y / 30, -1, 1);
 }
-
-
