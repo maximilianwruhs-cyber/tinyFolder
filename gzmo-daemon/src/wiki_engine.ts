@@ -133,9 +133,10 @@ export class WikiEngine {
     // Find all cabinet entries not yet consolidated
     let cabinetFiles: string[];
     try {
+      const consolidatedSet = new Set(this.digest.consolidated);
       cabinetFiles = readdirSync(this.cabinetPath)
         .filter(f => f.endsWith(".md"))
-        .filter(f => !this.digest.consolidated.includes(f));
+        .filter(f => !consolidatedSet.has(f));
     } catch {
       return results;
     }
