@@ -73,12 +73,12 @@ describe("searchVault", () => {
     expect(results.length).toBe(2);
 
     // First result should be perfect match
-    expect(results[0].file).toBe("perfect.md");
-    expect(results[0].score).toBeCloseTo(1.0);
+    expect(results[0]!.file).toBe("perfect.md");
+    expect(results[0]!.score).toBeCloseTo(1.0);
 
     // Second result should be partial match
-    expect(results[1].file).toBe("partial.md");
-    expect(results[1].score).toBeCloseTo(0.5);
+    expect(results[1]!.file).toBe("partial.md");
+    expect(results[1]!.score).toBeCloseTo(0.5);
   });
 
   test("computes magnitude dynamically if missing from chunk", async () => {
@@ -99,8 +99,8 @@ describe("searchVault", () => {
 
     const results = await searchVault("test query", store);
     expect(results.length).toBe(1);
-    expect(results[0].file).toBe("legacy.md");
-    expect(results[0].score).toBeCloseTo(1.0);
+    expect(results[0]!.file).toBe("legacy.md");
+    expect(results[0]!.score).toBeCloseTo(1.0);
   });
 });
 
