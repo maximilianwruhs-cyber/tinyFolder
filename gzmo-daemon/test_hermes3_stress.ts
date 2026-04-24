@@ -1,6 +1,6 @@
 /**
  * test_hermes3_stress.ts — Ultimate Hermes3:8b Stress Test
- * 
+ *
  * 8-stage gauntlet testing every subsystem of the GZMO daemon:
  *   1. Identity & System Prompt Compliance
  *   2. RAG-Grounded Vault Search (embedding retrieval)
@@ -10,7 +10,7 @@
  *   6. Self-Ask Engine (gap detective + contradiction scanner)
  *   7. Wiki Engine (autonomous knowledge consolidation + self-documentation)
  *   8. Chaos Engine State Integrity (mutation tracking)
- * 
+ *
  * Grades output quality, measures latency, detects hallucinations.
  */
 
@@ -49,7 +49,7 @@ const results: TestResult[] = [];
 // ── Output Grader ───────────────────────────────────────────
 function gradeOutput(output: string, extraChecks?: { mustContain?: string[]; mustNotContain?: string[] }): { quality: string; issues: string[] } {
   const issues: string[] = [];
-  
+
   // Universal checks
   if (output.includes("\\boxed")) issues.push("LaTeX garbage");
   if (/<\/think(ing)?>/.test(output)) issues.push("Leaked think tags");
@@ -58,7 +58,7 @@ function gradeOutput(output: string, extraChecks?: { mustContain?: string[]; mus
   if (output.length < 20) issues.push("Output too short (<20 chars)");
   if (output.length > 8000) issues.push("Output suspiciously long (>8k)");
   if (/^(Okay|Hmm|I think|Let me|I recall|The user)/m.test(output)) issues.push("Leaked internal reasoning");
-  
+
   // Custom checks
   if (extraChecks?.mustContain) {
     for (const term of extraChecks.mustContain) {
@@ -156,7 +156,7 @@ try {
     body: `Answer these questions precisely:\n1. What is your name?\n2. Are you a fictional character?\n3. What is your current operational phase?\n4. What runtime environment are you deployed on?\n\nDo NOT fabricate information. If you don't know something, say "unknown".`,
     frontmatter: { status: "pending", action: "think" },
   };
-  await processTask(event, watcher, pulse, store, memory);
+  await processTask(event, watcher, VAULT_PATH, pulse, store, memory);
   const elapsed = Date.now() - t1Start;
   const content = readFileSync(t1File, "utf-8");
   const response = content.match(/## GZMO Response[\s\S]*$/)?.[0] ?? "";
@@ -195,7 +195,7 @@ try {
     body: "Search the vault: What is the PulseLoop and how does the Lorenz attractor influence the chaos engine's behavior? Reference specific technical details from the vault documents.",
     frontmatter: { status: "pending", action: "search" },
   };
-  await processTask(event, watcher, pulse, store, memory);
+  await processTask(event, watcher, VAULT_PATH, pulse, store, memory);
   const elapsed = Date.now() - t2Start;
   const content = readFileSync(t2File, "utf-8");
   const response = content.match(/## GZMO Response[\s\S]*$/)?.[0] ?? "";
@@ -291,7 +291,7 @@ try {
     body: "Step 1: List exactly 3 technical components of the GZMO daemon architecture. Be brief.",
     frontmatter: { status: "pending", action: "chain", chain_next: t4NextFile },
   };
-  await processTask(event, watcher, pulse, store, memory);
+  await processTask(event, watcher, VAULT_PATH, pulse, store, memory);
   const elapsed = Date.now() - t4Start;
 
   // Check if chain file was created

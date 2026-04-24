@@ -53,8 +53,7 @@ function safeCount(dir: string, predicate: (name: string) => boolean): number {
     // Use Bun to list when possible, but stay compatible: fallback to readdirSync isn't imported here.
     // We'll parse via `Bun.file` is async; this health is sync-ish. Keep it simple using spawn-free approach:
     // Read directory listing via Bun (works in bun runtime).
-    // @ts-expect-error Bun is global in runtime.
-    const names: string[] = (Bun as any).file(dir).exists ? [] : [];
+    const names: string[] = (globalThis as any).Bun?.file(dir).exists ? [] : [];
     void entries;
     // We can't reliably read dir without readdirSync; keep it in main health writer where readdirSync exists.
     return 0;
