@@ -16,6 +16,7 @@ import type { ChaosSnapshot } from "./types";
 import type { EmbeddingStore } from "./embeddings";
 import { searchVault, formatSearchContext, type SearchResult } from "./search";
 import { atomicWriteJson, safeWriteText } from "./vault_fs";
+import { createAutoInboxTasks, parseTypedNextAction, type AutoTaskSpec } from "./auto_tasks";
 
 const MIN_BODY_LENGTH = 100;
 const MIN_RESPONSE_LENGTH = 120;
@@ -147,6 +148,27 @@ export class DreamEngine {
       quality.score,
     );
 
+    // Closed loop: promote explicitly typed next actions into Inbox tasks.
+    const typed = draft.nextActions
+      .map((line) => ({ raw: line, parsed: parseTypedNextAction(line) }))
+      .filter((x) => x.parsed !== null) as Array<{ raw: string; parsed: { type: any; title: string } }>;
+
+    if (typed.length > 0) {
+      const tasks: AutoTaskSpec[] = typed.map((t) => ({
+        type: t.parsed.type,
+        title: t.parsed.title,
+        body: [
+          `Source: Dream distilled from \`${task.id}\` via \`${path.basename(dreamPath)}\`.`,
+          "",
+          "Instruction:",
+          "- Execute this task and write the result back into this file under `## GZMO Response`.",
+        ].join("\n"),
+        source: { subsystem: "dream", sourceFile: path.basename(dreamPath) },
+      }));
+
+      await createAutoInboxTasks({ vaultPath: this.vaultPath, tasks }).catch(() => {});
+    }
+
     await this.markDigested(task.id);
 
     return {
@@ -271,6 +293,7 @@ export class DreamEngine {
       "Rules:",
       "- Evidence bullets must cite `Task request`, `Model response`, or a canonical file name.",
       "- Next Actions must be operational, not philosophical.",
+      "- If (and only if) a Next Action should become an Inbox task, prefix it with one of: [maintenance] [research] [build] [verify] [curate].",
       "- If the task is trivial or generic, say so directly and keep Next Actions conservative.",
       "- Keep Summary and Delta together under 220 words.",
     ].join("\n");
@@ -438,12 +461,16 @@ export class DreamEngine {
   }
 
   private parseDreamDraft(raw: string): DreamDraft | null {
-    const summary = this.extractSection(raw, "Summary", "Evidence");
-    const evidence = this.extractBullets(this.extractSection(raw, "Evidence", "Delta"));
-    const delta = this.extractSection(raw, "Delta", "Next Actions");
-    const nextActions = this.extractBullets(this.extractSection(raw, "Next Actions", "Confidence"));
-    const confidenceMatch = raw.match(/Confidence:\s*([01](?:\.\d+)?)/i);
-    const unverifiedClaims = this.extractBullets(this.extractSection(raw, "Unverified Claims"));
+    // Accept both legacy label format ("Summary:") and markdown heading format ("## Summary").
+    const summary = this.extractSection(raw, "Summary", "Evidence") || this.extractMarkdownSection(raw, "Summary", "Evidence");
+    const evidenceSection = this.extractSection(raw, "Evidence", "Delta") || this.extractMarkdownSection(raw, "Evidence", "Delta");
+    const evidence = this.extractBullets(evidenceSection);
+    const delta = this.extractSection(raw, "Delta", "Next Actions") || this.extractMarkdownSection(raw, "Delta", "Next Actions");
+    const nextActionsSection = this.extractSection(raw, "Next Actions", "Confidence") || this.extractMarkdownSection(raw, "Next Actions", "Confidence");
+    const nextActions = this.extractBullets(nextActionsSection);
+    const confidenceMatch = raw.match(/Confidence:\s*([01](?:\.\d+)?)/i) ?? raw.match(/##\s*Confidence\s+([01](?:\.\d+)?)/i);
+    const unverifiedSection = this.extractSection(raw, "Unverified Claims") || this.extractMarkdownSection(raw, "Unverified Claims");
+    const unverifiedClaims = this.extractBullets(unverifiedSection);
     const confidence = confidenceMatch ? Number.parseFloat(confidenceMatch[1]!) : 0.5;
 
     if (!summary || !delta) return null;
@@ -465,6 +492,16 @@ export class DreamEngine {
     const pattern = nextEscaped
       ? new RegExp(`${escaped}:\\s*([\\s\\S]*?)\\n${nextEscaped}:`, "i")
       : new RegExp(`${escaped}:\\s*([\\s\\S]*)$`, "i");
+    const match = raw.match(pattern);
+    return match?.[1]?.trim() ?? "";
+  }
+
+  private extractMarkdownSection(raw: string, label: string, nextLabel?: string): string {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const nextEscaped = nextLabel ? nextLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : null;
+    const pattern = nextEscaped
+      ? new RegExp(`##\\s*${escaped}\\s+([\\s\\S]*?)\\n##\\s*${nextEscaped}\\s+`, "i")
+      : new RegExp(`##\\s*${escaped}\\s+([\\s\\S]*?)(?:\\n##\\s+|$)`, "i");
     const match = raw.match(pattern);
     return match?.[1]?.trim() ?? "";
   }

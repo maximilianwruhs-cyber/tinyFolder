@@ -27,6 +27,7 @@ import * as path from "path";
 import type { EmbeddingStore } from "./embeddings";
 import type { ChaosSnapshot } from "./types";
 import { searchVault, formatSearchContext, type SearchResult } from "./search";
+import { createAutoInboxTasks, parseTypedNextAction, type AutoTaskSpec } from "./auto_tasks";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -117,8 +118,16 @@ export class SelfAskEngine {
     const results: SelfAskResult[] = [];
 
     // Chaos-aware gating
-    if (snap.tension > 15 || snap.energy < 50 || !snap.alive) {
-      console.log(`[SELF-ASK] Skipped — tension=${snap.tension.toFixed(1)}, energy=${snap.energy.toFixed(0)}`);
+    //
+    // NOTE: `snap.tension` is 0–100 (derived from hardware telemetry + allostasis).
+    // The legacy threshold (15) effectively disables self-ask under normal load.
+    // We keep self-ask off in extreme stress, but allow it during normal operation.
+    const TENSION_SKIP = 70;
+    const ENERGY_MIN = 50;
+    if (snap.tension > TENSION_SKIP || snap.energy < ENERGY_MIN || !snap.alive) {
+      console.log(
+        `[SELF-ASK] Skipped — tension=${snap.tension.toFixed(1)}, energy=${snap.energy.toFixed(0)} (gate: tension>${TENSION_SKIP} or energy<${ENERGY_MIN})`
+      );
       return results;
     }
 
@@ -415,6 +424,11 @@ export class SelfAskEngine {
 
     const wikiLinks = [...new Set(relatedFiles)].map(f => `- [[${f}]]`);
 
+    const nextActions = [
+      "- [verify] If this result is actionable, convert it into a concrete inbox task and validate against the vault.",
+      "- [research] If this result is 'No connection found' / 'No Information', tighten query scope or improve source coverage.",
+    ];
+
     const content = [
       "---",
       `category: self_ask_${strategy}`,
@@ -429,6 +443,10 @@ export class SelfAskEngine {
       "## Result",
       "",
       output,
+      "",
+      "## Next actions",
+      "",
+      ...nextActions,
       "",
       "## Vault Links",
       "",
@@ -446,6 +464,28 @@ export class SelfAskEngine {
 
     await Bun.write(filepath, content);
     console.log(`[SELF-ASK] Written: ${filename}`);
+
+    // Closed loop: only typed next actions become inbox tasks.
+    const typed = nextActions
+      .map((line) => ({ raw: line, parsed: parseTypedNextAction(line.replace(/^-+\s*/, "")) }))
+      .filter((x) => x.parsed !== null) as Array<{ raw: string; parsed: { type: any; title: string } }>;
+    if (typed.length > 0) {
+      const tasks: AutoTaskSpec[] = typed.map((t) => ({
+        type: t.parsed.type,
+        title: t.parsed.title,
+        body: [
+          `Source: Self-Ask \`${strategy}\` via \`${filename}\`.`,
+          "",
+          "Context:",
+          "```",
+          output.slice(0, 1200),
+          "```",
+        ].join("\n"),
+        source: { subsystem: "self_ask", sourceFile: filename },
+      }));
+      await createAutoInboxTasks({ vaultPath: this.vaultPath, tasks }).catch(() => {});
+    }
+
     return filepath;
   }
 

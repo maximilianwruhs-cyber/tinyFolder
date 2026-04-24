@@ -8,7 +8,7 @@ tags:
   - node-js
 sources: 4
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-22'
+updated: '2026-04-24'
 ---
 # OpenClaw
 
@@ -67,3 +67,15 @@ From the research sources, OpenClaw implements a three-circuit model:
 - `raw/notebooklm/OpenClaw_Deep_Research__source__*.md`
 - `raw/notebooklm/The_Cognitive_Architecture_of_OpenClaw_Agents__source__*.md`
 - `raw/agent-logs/*_openclaw_research.md`
+
+- [[source-013c8bf1-2cfc-4b66-b0a7-4db9cffaca37-sovereign-blueprint-analysis]]
+
+- [[source-1fb0b911-8d9f-4ba1-868b-282558e388f5-notebooklm-analysis]]
+
+- [[source-4453493b-34eb-4a26-aa85-d2c6828bef98-persona-audit]]
+
+- [[source-48a649b9-7302-41c2-89a2-c94a0be41f58-artifacts-master-rust-orchestrator-blueprin]]
+
+- [[source-48a649b9-7302-41c2-89a2-c94a0be41f58-artifacts-mcp-integration-blueprint]]
+
+- [[source-51b6a24b-18d2-47e7-8680-05ebcd13d818-blueprint-05-memory-system]]

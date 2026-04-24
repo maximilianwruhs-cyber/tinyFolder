@@ -14,7 +14,7 @@
  */
 
 import { resolve, join, relative, basename } from "path";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readdirSync } from "fs";
 import { VaultWatcher } from "./src/watcher";
 import { processTask, infer } from "./src/engine";
 import { LiveStream } from "./src/stream";
@@ -32,6 +32,7 @@ import type { ChaosSnapshot } from "./src/types";
 import { safeWriteText } from "./src/vault_fs";
 import { describeRuntimeProfile, resolveRuntimeProfile } from "./src/runtime_profile";
 import { EmbeddingsQueue } from "./src/embeddings_queue";
+import { writeHealth } from "./src/health";
 
 // ── Global Abort Controller (for graceful shutdown of in-flight inference) ──
 export const daemonAbort = new AbortController();
@@ -192,6 +193,11 @@ watcher.on("task", async (event) => {
   try {
     await processTask(event, watcher, pulse, embeddings.getStore(), memory);
     stream.log(`✅ Task completed: **${event.fileName}**`);
+
+    // Ensure completed tasks become searchable for RAG (Inbox is embedded, but not live-watched by default).
+    if (embeddings.getStore()) {
+      embeddings.enqueueUpsertFile(`GZMO/Inbox/${event.fileName}.md`);
+    }
   } catch (err: any) {
     stream.log(`❌ Task failed: **${event.fileName}** — ${err?.message}`);
   }
@@ -489,6 +495,71 @@ setInterval(() => {
 
   // Feed heartbeat back into chaos engine
   pulse.emitEvent({ type: "heartbeat_fired", energy: snap.energy });
+}, 60_000);
+
+// ── Health report (every 60s) ───────────────────────────────
+setInterval(async () => {
+  const snap = pulse.snapshot();
+  const inboxDir = join(VAULT_PATH, "GZMO", "Inbox");
+  const cabinetDir = join(VAULT_PATH, "GZMO", "Thought_Cabinet");
+  const quarantineDir = join(VAULT_PATH, "GZMO", "Quarantine");
+
+  let inboxPending = 0, inboxProcessing = 0, inboxCompleted = 0, inboxFailed = 0;
+  try {
+    const files = readdirSync(inboxDir).filter((f) => f.endsWith(".md"));
+    for (const f of files) {
+      try {
+        const raw = await Bun.file(join(inboxDir, f)).text();
+        const m = raw.match(/^\s*status:\s*(\w+)\s*$/m);
+        const s = (m?.[1] ?? "").toLowerCase();
+        if (s === "pending") inboxPending++;
+        else if (s === "processing") inboxProcessing++;
+        else if (s === "completed") inboxCompleted++;
+        else if (s === "failed") inboxFailed++;
+      } catch {}
+    }
+  } catch {}
+
+  const cabinetNotes = (() => {
+    try { return readdirSync(cabinetDir).filter((f) => f.endsWith(".md")).length; } catch { return 0; }
+  })();
+  const quarantineNotes = (() => {
+    try { return readdirSync(quarantineDir).filter((f) => f.endsWith(".md")).length; } catch { return 0; }
+  })();
+
+  await writeHealth({
+    vaultPath: VAULT_PATH,
+    profile: runtime.name,
+    ollamaUrl: OLLAMA_API_URL,
+    model: process.env.OLLAMA_MODEL ?? "hermes3:8b",
+    pulse: {
+      tension: snap.tension,
+      energy: snap.energy,
+      phase: snap.phase,
+      alive: snap.alive,
+      deaths: snap.deaths,
+      tick: snap.tick,
+      thoughtsIncubating: snap.thoughtsIncubating,
+      thoughtsCrystallized: snap.thoughtsCrystallized,
+    },
+    scheduler: {
+      dreamsEnabled: runtime.enableDreams,
+      selfAskEnabled: runtime.enableSelfAsk,
+      wikiEnabled: runtime.enableWiki,
+      ingestEnabled: runtime.enableIngest,
+      wikiLintEnabled: runtime.enableWikiLint,
+      pruningEnabled: runtime.enablePruning,
+      embeddingsLiveEnabled: runtime.enableEmbeddingsLiveSync,
+    },
+    counts: {
+      inboxPending,
+      inboxProcessing,
+      inboxCompleted,
+      inboxFailed,
+      cabinetNotes,
+      quarantineNotes,
+    },
+  }).catch(() => {});
 }, 60_000);
 
 // ── Graceful Shutdown ──────────────────────────────────────

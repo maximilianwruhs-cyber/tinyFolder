@@ -9,7 +9,7 @@ tags:
   - sovereign
 sources: 2
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-22'
+updated: '2026-04-23'
 ---
 # Linux Workstation
 
@@ -40,3 +40,9 @@ The 2026 sovereign Linux desktop — a minimalist, telemetry-free development en
 
 - `raw/notebooklm/The_2026_Linux_Workstation__source__*.md`
 - `raw/notebooklm/Architecting_the_Minimalist_Linux_Desktop*`
+
+- [[source-1ae46419-de0a-4da1-9193-3f29c246c12b-linux-architecture-study]]
+
+- [[source-1ae46419-de0a-4da1-9193-3f29c246c12b-walkthrough]]
+
+- [[source-1fb0b911-8d9f-4ba1-868b-282558e388f5-notebooklm-analysis]]

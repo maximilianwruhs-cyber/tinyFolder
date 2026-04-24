@@ -24,6 +24,8 @@ import { atomicWriteJson, safeWriteText, resolveVaultPath } from "./vault_fs";
 import { writeSchemaCompliantWikiPage } from "./wiki_contract";
 import { appendWikiLogEntry } from "./wiki_log";
 import { rebuildWikiIndex } from "./wiki_index";
+import { createAutoInboxTasks, parseTypedNextAction, type AutoTaskSpec } from "./auto_tasks";
+import { assessWikiDraft, quarantineArtifact, createRepairTask } from "./quarantine";
 
 // ── Types ──────────────────────────────────────────────────
 interface ConsolidationResult {
@@ -196,22 +198,74 @@ export class WikiEngine {
         } catch {}
       }
 
-      const systemPrompt = `You are GZMO's Wiki Engine. Your job is to consolidate raw thought crystallizations into a clean, structured wiki article. Write in Markdown. Be precise and technical. Include a YAML frontmatter block with tags. Do NOT fabricate information — only synthesize what is present in the provided entries.${existingContext}`;
+      const systemPrompt = [
+        "You are GZMO's Wiki Engine.",
+        "Your job is to CONSOLIDATE the provided cabinet entries into a wiki page.",
+        "",
+        "Hard constraints:",
+        "- Be extractive and grounded: ONLY use information present in the provided entries and the optional EXISTING CONTEXT block.",
+        "- Do NOT use outside knowledge. Do NOT add generic filler or marketing language.",
+        "- Every non-trivial claim must be supported by an explicit quote or datum from the entries.",
+        "- If the entries are too thin, produce a short page that says so and list what information is missing.",
+        "",
+        "Output format constraints:",
+        "- Markdown only.",
+        "- The wiki contract will normalize frontmatter; you may include frontmatter but keep it minimal.",
+        "",
+        ...(existingContext ? ["EXISTING CONTEXT (may be used, also grounded):", existingContext] : []),
+      ].join("\n");
 
-      const prompt = `The following ${catEntries.length} crystallization entries are from category "${category}". Synthesize them into a single, well-structured wiki article suitable for the GZMO knowledge base.
+      const prompt = `The following ${catEntries.length} cabinet entries are from category "${category}". Consolidate them into a single wiki article.
 
 ${entryContext}
 
-Write a comprehensive wiki article that:
-1. Has a clear title as an H1 heading
-2. Includes YAML frontmatter with: tags, category, date, source_count
-3. Organizes the information logically
-4. Preserves specific data points (numbers, metrics, timestamps)
-5. Is concise but complete`;
+Required structure (Markdown):
+
+1) H1 title (short, specific; derived from the entries)
+2) ## Summary (2–4 bullets, each grounded)
+3) ## Evidence (quotes / extracted data)
+   - 3–10 bullets
+   - Each bullet MUST cite which entry it came from, e.g. "(Entry 2: 2026-..._dream.md)"
+4) ## Implications (grounded; may be empty)
+5) ## Next actions (1–5 bullets; concrete improvements or follow-ups)
+
+Rules:
+- If no evidence exists for a claim, do not include the claim.
+- If there are contradictions between entries, list them under Evidence as separate bullets.`;
+
+      const promptWithTaskTypes = [
+        prompt,
+        "",
+        "Next actions typing rule:",
+        "- If (and only if) a bullet should become an Inbox task, prefix it with one of: [maintenance] [research] [build] [verify] [curate].",
+      ].join("\n");
 
       try {
-        const article = await infer(systemPrompt, prompt);
+        const article = await infer(systemPrompt, promptWithTaskTypes);
         if (article.length < 50) continue;
+
+        const qualityCheck = assessWikiDraft(article);
+        if (!qualityCheck.ok) {
+          const qAbs = await quarantineArtifact({
+            vaultPath: this.vaultPath,
+            kind: "wiki",
+            sourceId: `category:${category}`,
+            reason: qualityCheck.reason ?? "other",
+            details: qualityCheck.details ?? "Wiki draft failed quality gate.",
+            rawMarkdown: article,
+          }).catch(() => null);
+
+          if (qAbs) {
+            await createRepairTask({
+              vaultPath: this.vaultPath,
+              title: `Repair wiki consolidation output (${category})`,
+              reason: qualityCheck.reason ?? "other",
+              quarantineFile: basename(qAbs),
+              suggestion: "Adjust the wiki consolidation prompt or add missing evidence/entry references, then re-run the wiki cycle.",
+            }).catch(() => {});
+          }
+          continue;
+        }
 
         // Determine wiki subdirectory
         const subDir = this.categoryToWikiDir(category);
@@ -227,6 +281,37 @@ Write a comprehensive wiki article that:
           wikiFileAbs: wikiFilePath,
           rawMarkdown: article,
         });
+
+        // Closed loop: promote typed Next actions into Inbox tasks.
+        try {
+          const nextActionsSection = article.match(/##\s*Next actions\s+([\s\S]*?)(?:\n## |\n---|$)/i)?.[1] ?? "";
+          const lines = nextActionsSection
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l.startsWith("- "))
+            .map((l) => l.slice(2).trim());
+
+          const typed = lines
+            .map((line) => ({ parsed: parseTypedNextAction(line), raw: line }))
+            .filter((x) => x.parsed !== null) as Array<{ raw: string; parsed: { type: any; title: string } }>;
+
+          if (typed.length > 0) {
+            const tasks: AutoTaskSpec[] = typed.map((t) => ({
+              type: t.parsed.type,
+              title: t.parsed.title,
+              body: [
+                `Source: Wiki consolidation \`${basename(wikiFilePath)}\` (category: ${category}).`,
+                "",
+                "Evidence excerpt (for grounding):",
+                "```",
+                (article.match(/##\s*Evidence\s+([\s\S]*?)(?:\n## |\n---|$)/i)?.[1] ?? "").trim().slice(0, 1200),
+                "```",
+              ].join("\n"),
+              source: { subsystem: "wiki", sourceFile: basename(wikiFilePath) },
+            }));
+            await createAutoInboxTasks({ vaultPath: this.vaultPath, tasks }).catch(() => {});
+          }
+        } catch {}
 
         // Mark entries as consolidated
         for (const entry of catEntries) {
@@ -308,19 +393,48 @@ Write a comprehensive wiki article that:
       .map(f => f.content)
       .join("\n\n---\n\n");
 
-    const systemPrompt = "You are GZMO's self-documentation engine. Generate a precise, technical architecture document describing your own daemon codebase. Be factual — describe what each module does based on the code signatures you see. Include the hardware profile.";
+    const systemPrompt = [
+      "You are GZMO's self-documentation engine.",
+      "Write a precise, technical architecture document describing the daemon codebase.",
+      "Hard constraints:",
+      "- No metaphors, no storytelling, no marketing language, no filler.",
+      "- Prefer tables and bullet lists over paragraphs.",
+      "- Be factual: only use information present in the provided module summaries + system info.",
+      "- Keep the 'System overview' to max 2 sentences.",
+      "",
+    ].join("\n");
 
-    const prompt = `Based on the following module summaries, generate a comprehensive architecture wiki document for the GZMO Edge Node daemon.
+    const prompt = `Based on the following module summaries, generate a structured architecture wiki document for the GZMO daemon.
 
 ${sourceContext}${systemInfo}
 
-Write a wiki article with:
-1. YAML frontmatter (tags: [architecture, self-documentation, auto-generated])
-2. System overview
-3. Module map (what each .ts file does)
-4. Hardware profile
-5. Available models
-6. Data flow diagram (as a text description)`;
+Required output format (Markdown):
+
+Frontmatter:
+- title: Architecture Overview
+- tags: [architecture, self-documentation, auto-generated]
+- sources: ${sourceFiles.length}
+
+Sections:
+1) # Architecture Overview
+2) ## System overview (max 2 sentences)
+3) ## Data flow (mechanical)
+   - Bullet list: Source -> Transform -> Write, using real module names.
+   - List the canonical vault paths written (e.g. \`GZMO/CHAOS_STATE.json\`, \`GZMO/Thought_Cabinet/\`, \`wiki/index.md\`, \`wiki/log.md\`, \`wiki/sources/\`).
+4) ## Module map (table)
+   A Markdown table with columns:
+   - Module
+   - Responsibility (1 line)
+   - Key exports (names only)
+   - Reads (paths or 'none')
+   - Writes (paths or 'none')
+   - Invariants (1 short bullet; e.g. 'never write to raw/')
+5) ## Runtime profile
+   - Kernel line
+   - GPU line
+   - Models list
+6) ## Known limitations (bullets)
+   - Only include limitations directly inferable from the summaries (e.g. missing data, partial coverage).`;
 
     try {
       const article = await infer(systemPrompt, prompt);

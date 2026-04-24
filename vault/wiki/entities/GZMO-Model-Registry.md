@@ -8,7 +8,7 @@ tags:
   - seed-document
 sources: 0
 created: '2026-04-22'
-updated: '2026-04-22'
+updated: '2026-04-23'
 ---
 # GZMO Model Registry
 
@@ -38,3 +38,10 @@ updated: '2026-04-22'
 2. System prompt compliance (GZMO identity must be maintained)
 3. Structured output capability (JSON, Markdown)
 4. Agentic reasoning (tool-calling, chain-of-thought)
+
+
+## Sources
+
+- [[source-013c8bf1-2cfc-4b66-b0a7-4db9cffaca37-advanced-ai-features-guide]]
+
+- [[source-34eb875f-6b6b-47b5-a919-03fc9bcde698-medusa-architecture]]

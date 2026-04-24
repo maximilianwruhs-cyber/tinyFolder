@@ -9,7 +9,7 @@ tags:
   - finance
 sources: 3
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-22'
+updated: '2026-04-24'
 ---
 # Trading Automation
 
@@ -49,3 +49,7 @@ Austrian-specific:
 - `raw/notebooklm/The_Architect-s_Handbook_for_Autonomous_Agentic_Trading_Systems*`
 - `raw/notebooklm/Q2_2026_Global_Momentum*`
 - `raw/notebooklm/Flatex_Brokerage*`
+
+- [[source-4453493b-34eb-4a26-aa85-d2c6828bef98-implementation-plan]]
+
+- [[source-48a649b9-7302-41c2-89a2-c94a0be41f58-artifacts-implementation-plan]]

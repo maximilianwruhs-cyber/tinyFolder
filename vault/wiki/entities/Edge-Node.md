@@ -9,7 +9,7 @@ tags:
   - gpu
 sources: 3
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-22'
+updated: '2026-04-24'
 ---
 # Edge Node
 
@@ -62,3 +62,23 @@ cp .env.example .env && ./deploy.sh
 - `raw/agent-logs/*_walkthrough.md` — Multiple deployment walkthroughs
 - `raw/notebooklm/Building_a_Private_Local_AI_Development_Environmen__source__*.md`
 - `raw/notebooklm/The_Sovereign_Software_Factory_Blueprint__source__*.md`
+
+- [[source-013c8bf1-2cfc-4b66-b0a7-4db9cffaca37-sovereign-blueprint-analysis]]
+
+- [[source-0b4a0bc3-327c-4ed2-8c29-bf638987158e-walkthrough]]
+
+- [[source-1ae46419-de0a-4da1-9193-3f29c246c12b-implementation-plan]]
+
+- [[source-1ae46419-de0a-4da1-9193-3f29c246c12b-walkthrough]]
+
+- [[source-34eb875f-6b6b-47b5-a919-03fc9bcde698-drift-analysis]]
+
+- [[source-404c175f-dcb8-4f73-9ee6-169af66c4ca7-walkthrough]]
+
+- [[source-4453493b-34eb-4a26-aa85-d2c6828bef98-walkthrough]]
+
+- [[source-48a649b9-7302-41c2-89a2-c94a0be41f58-artifacts-master-rust-orchestrator-blueprin]]
+
+- [[source-48a649b9-7302-41c2-89a2-c94a0be41f58-artifacts-mcp-integration-blueprint]]
+
+- [[source-51b6a24b-18d2-47e7-8680-05ebcd13d818-gzmo-lmstudio-blueprint]]

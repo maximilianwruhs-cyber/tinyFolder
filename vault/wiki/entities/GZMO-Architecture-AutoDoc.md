@@ -1,57 +1,70 @@
 ---
-title: GZMO Chaos Engine Architecture
+title: Architecture Overview
 type: entity
 tags: []
 sources: 0
 created: '2026-04-22'
-updated: '2026-04-22'
+updated: '2026-04-24'
 ---
-# GZMO Chaos Engine Architecture
+Here is the requested overview of the GZMO architecture system:
 
-## Frontmatter
-```yaml
-tags:
-  - architecture
-  - self-documentation
-  - auto-generated
-```
+# Architecture Overview
 
-## System Overview
-The GZMO Chaos Engine is a standalone inference engine designed to run on commodity hardware. It autonomously performs tasks, adapts a model of the world through crystallizations, and exhibits complex behaviors characteristic of chaotic systems - all while consuming minimal resources. The system consists of interlinked modules that perform specialized functions for overall behavior regulation.
+This system implements a configurable inference engine named "Hermes3" for analyzing and responding to time-sensitive tasks in a knowledge base / personal information management application.
 
-## Module Map
-- **types.ts**: Defines shared type definitions used throughout the engine.
-- **embeddings.ts**: Embeds vault markdown files using nomic-embed-text and maintains an embedding store to prevent redundant computations.
-- **engines/state.ts**: Manages engine state, including energy (0-100), phase (Idle/Build/Drop), death/rebirth lifecycle.  
-- **memory.ts**: Implements episodic task memory by recording the most recent completions for context injection in future prompts.
-- **search/ts**: Provides semantic search support through cosine similarity against embedded vault content.
-- **skills/ts**: Scans skills directory for structured skill injections based on engine phase.
-- **thoughts.cabinet**: A disco-themed internalization system where lore/skill outputs can be absorbed. Thoughts incubate, mature and crystallize into irreversible physical mutations of the Lorenz attractor topology.
-- **alloysstasis.ts**: Manages computational allostatic stress response to prevent "dark room" system sedation, allowing for real signal response.
-- **dreams.ts**: Distills completed tasks into higher-level thought cabinet content, employing dream schema structures and evidence-based claim separation.
-- **wiki.contract/**: Enforces wiki page quality by detecting HTML outside code blocks.
-- **engines/engine.ts**: Core inference logic that orchestrates task processing based on prompts and skill entries.  
-- **engine\_state.ts**: Handles engine state changes including energy, phase transitions, and determines when the system will die or be reborn.
-- **wiki.index.ts**: Rebuilds wiki index content periodically to reflect current known facts and relationships. 
-- **wiki.graph.test/**: Tests functions used in graph-based concept-entity mapping.
-- **engines/pulse.ts**: The sovereign heartbeat controlling all subsystem activation, managing time step progression through Lorenz attractor calculations.  
+## System overview
 
-## Hardware Profile
-The GZMO Chaos Engine system utilizes a single NVIDIA GeForce GTX 1070 GPU with 8GB of VRAM. Linux kernel version is 6.17.0-22-generic.
+- The inference engine receives tasks as markdown from predefined `GZMO/raw/.*` source folder
+- It dispatches these tasks downstream into the system based on embedded `action:` metadata
+- The search module then reads through indexed embeddings to find context for each task, pulling in results via an Ollama embedding model pipeline 
+- Task memory keeps a rolling log of prior outputs for cross-task continuity
+- After processing is done, both task-specific responses and new knowledge are written back out to the wiki `sources/` area
+- The DreamEngine then consumes completed outputs to distill out higher-signal Thought Cabinet updates
 
-## Available Models
-Currently no specific pre-trained models are listed as being available for use in the architecture.
+## Data flow 
 
-## Data Flow Diagram Description
-The data flow of the GZMO Chaos Engine is primarily centered around the 'pulse' heartbeat mechanism which controls all operations:
-1. Hardware telemetry flows into tension calculations.
-2. Lorenz attractor and logistic map subsystems update every system tick.
-3. System state and memory entries are used to inform inferencing decisions.
-4. Task outputs (skills, prompts) are absorbed by thoughts incubating and eventually crystallizing; mutating the model of reality.
-5. Through allostatic regulation, a homeostatic balance prevents task dormancy while allowing responsiveness. 
-6. Completed tasks move into memories, informing new contexts, and dreams process insights into higher-level knowledge.  
-7. Constant semantic searches against vault embeddings feed ongoing context for inferencing operations.
-8. Throughout the system, quality assurance functions maintain wiki integrity and concept relationships.
-9. A self-documenting aspect ensures that changes are noted in a manner reflective of the current state.
+- Source: reads markdown files from `GZMO/raw/.*`
+- Transform:
+  - ProcessTask 
+  - Search
+  - Engine
+  - DreamEngine (writes to GZMO/Thought_Cabinet/)
+- Write:
+  - Writes task outputs and updates to wiki/sources/
+  
+## Module map
 
-The described architecture facilitates an intricate dance between deterministic task processing and stochastic thought evolution, driven by an underpinning of chaotic and adaptive systems behavior. The design showcases a high level of modularity combined with robust integration points ensuring operational coherence within the complex system.
+| Module            | Responsibility                        | Exports                                           | Reads                                                 | Writes                                              | Invariants                                        |
+|-------------------|----------------------------------------|----------------------------------------------------|------------------------------------------------------|-----------------------------------------------------|-----------------------------------------------------|
+| raw/               | source of new tasks (inference input)  | read                                          | `GZMO/raw/.*, GZMO/raw/*.md` | none                                                | never write to raw/|                                
+| search            | semantic vault query                 | `searchVault`, `formatSearchContext`             | reads embeddings store from EmbeddingStore         | writes to search.Vault                           | avoid circular linking via search |
+| embeddings        | text embedding of markdown files     | `EmbeddingChunk`, `EmbeddingStore`               | all .md vault files                                  | `EmbeddingStore.storePath`                         | no file should be embedded more than once       |
+| engine            | core inference logic                 | `infer`, `processTask`                           | search embedings, task memory                      | writes updated `GZMO/wiki/.*` to disk             | avoid writing same path more than required      |
+| memory            | persistent cache of recent outputs  | append most recently completed tasks              | tail of GZOM/CHAOS_STATE.json output history       | continually extended GZMO/CHAOS_STATE.json     | always keep pointer to latest memory entry in    |
+| dream             | distill high-signal knowledge         | `writeKnowledge`                                 | reads from completed `GZMO/raw/.*` task outputs    | writes distilled Thoughts to Thought_Cabinet/  | never overwrite existing cabinet entries        |  
+| LorenzAttractor   | logistic map & strange attractor      | tickCortisol, allostateAdjustedTension()         | none                                                 | impacts engine runtime profile                     | avoid injecting openclaw or subnet layer signals|
+| embeddings_queue  | synchronization of text embedding     | syncEmbeddings(), removeFileEmbeddings()          | read and write EmbeddingStore                        | only direct interaction with embeddings module    | ensure queue is up-to-date before mutating      |
+| wiki              | collation of final outputs             | rebuildWikiIndex, containsHtmlOutsideCodeFences   | reads processed outputs from `raw/` & embedded task results | writes `wiki/*.md` to disk                          |- 
+| Allostate         | stress handling for autonomous learning| defaultCortisolState(), allostateAdjusetedTensi  | engine runtime state                                 | impacts embedding frequency                       | never let system drive become zero             |
+
+## Runtime profile
+
+* Kernel line: Linux 6.17.0-22-generic #22~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Mar 26 15:25:54 UTC 2 
+* GPU line: NVIDIA GeForce GTX 1070, 8192 MiB
+* Models list:
+NAME                        ID              SIZE      MODIFIED    
+hermes3:8b                  4f6b83f30b62    4.7 GB                     
+qwen3-4b-thinking:latest    eb6d770ac811    2.5 GB                     
+qwen3:4b                    359d7dd4bcda    2.5 GB                     
+qwen2.5:3b                  357c53fb659c    1.9 GB                     
+gemma4-e4b:latest           95430c149f16    5.3 GB    
+
+## Known limitations
+- Only analyzes and processes files from `GZMO/raw/` to ensure idempotent operation
+- Cannot dynamically adjust inference engine model parameters based on task difficulty
+- Does not have access directly into any other databases or data sources beyond embedded vault
+- Lack of cross-module unit tests makes some interactions suspect
+
+The architecture provides a detailed accounting of the current GZMO system capabilities, interactions between key modules, and limitations given the static nature of this mechanical processing pipeline. Enhancements in task adaptivity would likely require changes to search algorithm, new memory modules, or dynamic model updates to engine. However, major changes to input/output paths could disrupt established expectations and lead to incorrect downstream assumptions.
+
+Please let me know if you need any other details! I enjoyed walking through the code architecture today.

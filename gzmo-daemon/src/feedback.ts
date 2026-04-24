@@ -11,9 +11,9 @@
 // ── ChaosEvent ─────────────────────────────────────────────────────
 
 export type ChaosEvent =
-  | { type: "task_completed"; tokenCount: number; durationMs: number }
-  | { type: "task_failed"; errorType: string }
-  | { type: "task_received"; bodyLength: number }
+  | { type: "task_completed"; fileName: string; action?: string; summary?: string; tokenCount: number; durationMs: number }
+  | { type: "task_failed"; fileName: string; action?: string; errorType: string }
+  | { type: "task_received"; fileName: string; action?: string; bodyLength: number; title?: string }
   | { type: "heartbeat_fired"; energy: number }
   | { type: "dream_proposed"; dreamText: string }
   | { type: "self_ask_completed"; strategy: string; result: string }
@@ -79,15 +79,25 @@ export function energyDelta(event: ChaosEvent): number {
 export function thoughtSeed(event: ChaosEvent): ThoughtSeed | null {
   switch (event.type) {
     case "task_completed":
-      return { category: "task_completed", text: `Completed task (${event.tokenCount} tokens, ${event.durationMs}ms)` };
+      // Prefer task-substance as seeds; avoid purely numeric telemetry.
+      return {
+        category: "task_completed",
+        text: [
+          `Task completed: ${event.fileName}${event.action ? ` (${event.action})` : ""}`,
+          event.summary ? `Outcome: ${event.summary}` : null,
+        ].filter(Boolean).join(" — "),
+      };
     case "task_failed":
-      return { category: "task_failed", text: `Task failed: ${event.errorType}` };
+      return {
+        category: "task_failed",
+        text: `Task failed: ${event.fileName}${event.action ? ` (${event.action})` : ""} — ${event.errorType}`,
+      };
     case "task_received":
-      return event.bodyLength > 50
-        ? { category: "interaction", text: `Received ${event.bodyLength}-char task` }
-        : null;
+      // Strict gate: do not internalize task_received. Only internalize after completion/distillation.
+      return null;
     case "heartbeat_fired":
-      return { category: "heartbeat", text: `Heartbeat at energy ${event.energy.toFixed(0)}%` };
+      // Heartbeat is state telemetry. Do not internalize it as a thought seed; it floods the cabinet with low-signal noise.
+      return null;
     case "dream_proposed":
       return { category: "dream", text: event.dreamText };
     case "self_ask_completed":

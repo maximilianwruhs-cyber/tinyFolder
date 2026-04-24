@@ -20,6 +20,25 @@
 vault/GZMO/embeddings.json
 vault/raw/
 
+# vault runtime artifacts (daemon writes constantly; keep out of git)
+vault/GZMO/CHAOS_STATE.json
+vault/GZMO/Live_Stream.md
+vault/GZMO/health.md
+vault/GZMO/wiki-lint-report.md
+vault/GZMO/memory.json
+vault/GZMO/.gzmo_*.json
+vault/GZMO/Inbox/
+vault/GZMO/Subtasks/
+vault/GZMO/Thought_Cabinet/
+vault/GZMO/Quarantine/
+
+# auto-generated wiki outputs (keep stable docs in entities/ + topics/)
+vault/wiki/concepts/
+vault/wiki/sources/
+vault/wiki/sessions/
+vault/wiki/log.md
+vault/wiki/index.md
+
 # OS / editor
 .DS_Store
 .idea/

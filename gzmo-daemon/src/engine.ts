@@ -74,7 +74,16 @@ function buildSystemPrompt(
   vaultContext?: string,
   memoryContext?: string,
 ): string {
-  let prompt = "You are GZMO, a sovereign local AI daemon running on this machine. GZMO is your name, not an acronym. You are NOT a fictional character. Respond in Markdown.";
+  let prompt = [
+    "You are GZMO, a sovereign local AI daemon running on this machine.",
+    "GZMO is your name, not an acronym. You are NOT a fictional character.",
+    "Respond in Markdown.",
+    "",
+    "Hard constraints:",
+    "- Follow the task's requested structure exactly (headings, bullet counts, 'exactly N', etc.).",
+    "- Do not invent information. If something is not present in the task (or provided context), say so explicitly and keep it brief.",
+    "- If asked to quote text, quote it verbatim from the task/context.",
+  ].join("\n");
 
   if (snap) {
     // Phase-driven persona modulation
@@ -133,7 +142,13 @@ export async function processTask(
   watcher.lockFile(filePath);
 
   // Emit task_received event into chaos engine
-  pulse?.emitEvent({ type: "task_received", bodyLength: body.length });
+  pulse?.emitEvent({
+    type: "task_received",
+    fileName,
+    action: String(frontmatter?.action ?? "think"),
+    bodyLength: body.length,
+    title: String(frontmatter?.title ?? "").trim() || undefined,
+  });
 
   try {
     // 0. Parse action from frontmatter
@@ -215,6 +230,9 @@ export async function processTask(
     const durationMs = Date.now() - startTime;
     pulse?.emitEvent({
       type: "task_completed",
+      fileName,
+      action: String(frontmatter?.action ?? "think"),
+      summary: fullText.slice(0, 240).replace(/\s+/g, " ").trim() || undefined,
       tokenCount: fullText.length / 4,
       durationMs,
     });
@@ -251,7 +269,12 @@ export async function processTask(
       });
     } catch { /* last resort */ }
 
-    pulse?.emitEvent({ type: "task_failed", errorType: err?.message ?? "unknown" });
+    pulse?.emitEvent({
+      type: "task_failed",
+      fileName,
+      action: String(frontmatter?.action ?? "think"),
+      errorType: err?.message ?? "unknown",
+    });
 
   } finally {
     setTimeout(() => watcher.unlockFile(filePath), 1000);

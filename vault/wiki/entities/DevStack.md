@@ -8,7 +8,7 @@ tags:
   - architecture
 sources: 3
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-22'
+updated: '2026-04-24'
 ---
 # DevStack
 
@@ -47,3 +47,11 @@ DevStack_v2/
 
 - `raw/agent-logs/*devstack_audit*.md`
 - `raw/agent-logs/*devstack_architecture*.md`
+
+- [[source-08101175-a0cf-465c-b528-1a38665c0d74-verification-report]]
+
+- [[source-1469a805-9553-44e4-8b26-0f660cca31c1-artifacts-audit-report]]
+
+- [[source-1ae46419-de0a-4da1-9193-3f29c246c12b-implementation-plan]]
+
+- [[source-51b6a24b-18d2-47e7-8680-05ebcd13d818-blueprint-02-chief-of-staff]]

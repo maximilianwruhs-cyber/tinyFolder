@@ -9,7 +9,7 @@ tags:
   - programming
 sources: 2
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-22'
+updated: '2026-04-24'
 ---
 # Game Engine
 
@@ -35,3 +35,5 @@ Rust-based game engine development with a focus on deterministic polyhedral dyna
 - `raw/notebooklm/The_Architecture_of_a_Trading_Card_Game*`
 - `raw/notebooklm/The_Architecture_of_Engagement*`
 - `raw/notebooklm/The_Architecture_of_Immersion*`
+
+- [[source-4b77aeee-ad27-47ea-94b3-6b6938062915-artifacts-implementation-plan]]
