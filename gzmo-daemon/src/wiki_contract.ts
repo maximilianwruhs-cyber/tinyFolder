@@ -2,6 +2,7 @@ import matter from "gray-matter";
 import { basename, dirname, extname, relative, resolve } from "path";
 import { existsSync } from "fs";
 import { safeWriteText } from "./vault_fs";
+import { isoDate } from "./utils";
 
 export type WikiType = "entity" | "concept" | "topic" | "source-summary" | "dream" | "index" | "log" | "overview";
 
@@ -19,10 +20,6 @@ export interface NormalizedWikiPage {
   frontmatter: WikiFrontmatter;
   markdown: string; // full file content (frontmatter + body)
   fileBaseName: string; // filename without extension (for wikilinks)
-}
-
-function isoDate(date = new Date()): string {
-  return date.toISOString().slice(0, 10);
 }
 
 function firstH1(body: string): string | null {

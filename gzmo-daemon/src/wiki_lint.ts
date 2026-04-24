@@ -5,6 +5,7 @@ import { atomicWriteText } from "./vault_fs";
 import { appendWikiLogEntry } from "./wiki_log";
 import { writeSchemaCompliantWikiPage } from "./wiki_contract";
 import { rebuildWikiIndex } from "./wiki_index";
+import { isoDate } from "./utils";
 
 export interface WikiLintFinding {
   kind: "missing_frontmatter" | "invalid_frontmatter" | "broken_link" | "orphan" | "stale";
@@ -21,10 +22,6 @@ export interface WikiLintReport {
     normalizedPages: number;
     indexRebuilt: boolean;
   };
-}
-
-function isoDate(date = new Date()): string {
-  return date.toISOString().slice(0, 10);
 }
 
 function walkMdFiles(root: string): string[] {

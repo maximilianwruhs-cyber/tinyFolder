@@ -2,12 +2,9 @@ import { readdirSync, readFileSync } from "fs";
 import { join, relative, resolve, basename, extname } from "path";
 import matter from "gray-matter";
 import { atomicWriteText } from "./vault_fs";
+import { isoDate } from "./utils";
 
 type IndexSection = "Entities" | "Concepts" | "Topics" | "Source Summaries" | "Dreams" | "Other";
-
-function isoDate(date = new Date()): string {
-  return date.toISOString().slice(0, 10);
-}
 
 function walkMdFiles(root: string): string[] {
   const out: string[] = [];

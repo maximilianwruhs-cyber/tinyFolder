@@ -1,11 +1,8 @@
 import { join } from "path";
 import { atomicWriteText } from "./vault_fs";
+import { isoDate } from "./utils";
 
 export type WikiOperation = "ingest" | "query" | "lint" | "update" | "create" | "dream";
-
-function isoDate(date = new Date()): string {
-  return date.toISOString().slice(0, 10);
-}
 
 export async function ensureWikiLogExists(vaultPath: string): Promise<void> {
   const logPath = join(vaultPath, "wiki", "log.md");
