@@ -191,7 +191,7 @@ watcher.on("task", async (event) => {
   stream.log(`📥 Task claimed: **${event.fileName}** (${action})`);
 
   try {
-    await processTask(event, watcher, pulse, embeddings.getStore(), memory);
+    await processTask(event, watcher, VAULT_PATH, pulse, embeddings.getStore(), memory);
     stream.log(`✅ Task completed: **${event.fileName}**`);
 
     // Ensure completed tasks become searchable for RAG (Inbox is embedded, but not live-watched by default).

@@ -131,6 +131,7 @@ export async function infer(system: string, prompt: string): Promise<string> {
 export async function processTask(
   event: TaskEvent,
   watcher: VaultWatcher,
+  vaultRoot: string,
   pulse?: PulseLoop,
   embeddingStore?: EmbeddingStore,
   memory?: TaskMemory,
@@ -163,7 +164,7 @@ export async function processTask(
 
     // 2. Build context based on action
     let vaultContext: string | undefined;
-    
+
     if (action === "search" && embeddingStore) {
       // Vault search: find relevant chunks before answering
       const results = await searchVault(body, embeddingStore, OLLAMA_API_URL, 3);
@@ -179,7 +180,7 @@ export async function processTask(
     const temp = snap?.llmTemperature ?? 0.7;
     const maxTok = snap?.llmMaxTokens ?? 400;
     const valence = snap?.llmValence ?? 0;
-    console.log(`[ENGINE] Model: ${OLLAMA_MODEL} (temp: ${temp.toFixed(2)}, tokens: ${maxTok}, val: ${valence >= 0 ? "+" : ""}${valence.toFixed(2)}, phase: ${snap?.phase ?? "?"})`);    
+    console.log(`[ENGINE] Model: ${OLLAMA_MODEL} (temp: ${temp.toFixed(2)}, tokens: ${maxTok}, val: ${valence >= 0 ? "+" : ""}${valence.toFixed(2)}, phase: ${snap?.phase ?? "?"})`);
 
     // 4. Build system prompt with context (now chaos-modulated)
     const memoryContext = memory?.toPromptContext();
@@ -239,20 +240,20 @@ export async function processTask(
 
     // 12. Handle chain action — create next task
     if (action === "chain" && frontmatter?.chain_next) {
-      const nextTask = String(frontmatter.chain_next);
+      const { basename, dirname, join } = await import("path");
+
+      // Sanitize nextTask to prevent path traversal
+      let nextTask = basename(String(frontmatter.chain_next));
+      if (!nextTask.endsWith(".md")) {
+        nextTask += ".md";
+      }
+
       console.log(`[ENGINE] Chain → next task: ${nextTask}`);
-      const { dirname, join } = await import("path");
       const chainPath = join(dirname(filePath), nextTask);
       const chainContent = `---\nstatus: pending\naction: think\nchain_from: ${fileName}\n---\n\n## Chained Task\n\nPrevious context:\n${fullText.slice(0, 300)}\n\nContinue from here.`;
-      
+
       try {
-        // Derive vault root from the task path (Inbox lives under vault/GZMO).
-        const vaultRoot = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? "";
-        if (vaultRoot) {
-          await safeWriteText(vaultRoot, chainPath, chainContent);
-        } else {
-          await Bun.write(chainPath, chainContent);
-        }
+        await safeWriteText(vaultRoot, chainPath, chainContent);
       } catch (err) {
         console.warn(`[ENGINE] Chain write failed: ${err}`);
       }
