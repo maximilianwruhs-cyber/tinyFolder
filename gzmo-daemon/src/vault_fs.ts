@@ -9,8 +9,8 @@
  * This module is intentionally small and dependency-free.
  */
  
-import { dirname, relative, resolve, sep } from "path";
-import { mkdirSync, renameSync, writeFileSync } from "fs";
+import { dirname, join, relative, resolve, sep } from "path";
+import { mkdirSync, readdirSync, renameSync, writeFileSync } from "fs";
 import { mkdir, rename } from "fs/promises";
  
 export class VaultPathError extends Error {
@@ -93,5 +93,29 @@ export async function atomicWriteJson(vaultRoot: string, targetPath: string, val
  
 export function atomicWriteJsonSync(vaultRoot: string, targetPath: string, value: unknown, space = 2): void {
   atomicWriteTextSync(vaultRoot, targetPath, JSON.stringify(value, null, space));
+}
+
+export function walkMdFiles(root: string): string[] {
+  const out: string[] = [];
+  const stack: string[] = [root];
+  while (stack.length) {
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name.startsWith(".")) continue;
+        stack.push(full);
+      } else if (e.isFile() && e.name.endsWith(".md")) {
+        out.push(full);
+      }
+    }
+  }
+  return out;
 }
  

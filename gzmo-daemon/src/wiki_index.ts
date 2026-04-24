@@ -1,36 +1,12 @@
 import { readdirSync, readFileSync } from "fs";
 import { join, relative, resolve, basename, extname } from "path";
 import matter from "gray-matter";
-import { atomicWriteText } from "./vault_fs";
+import { atomicWriteText, walkMdFiles } from "./vault_fs";
 
 type IndexSection = "Entities" | "Concepts" | "Topics" | "Source Summaries" | "Dreams" | "Other";
 
 function isoDate(date = new Date()): string {
   return date.toISOString().slice(0, 10);
-}
-
-function walkMdFiles(root: string): string[] {
-  const out: string[] = [];
-  const stack: string[] = [root];
-  while (stack.length) {
-    const dir = stack.pop()!;
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const e of entries) {
-      const full = join(dir, e.name);
-      if (e.isDirectory()) {
-        if (e.name.startsWith(".")) continue;
-        stack.push(full);
-      } else if (e.isFile() && e.name.endsWith(".md")) {
-        out.push(full);
-      }
-    }
-  }
-  return out;
 }
 
 function sectionFromRelPath(rel: string): IndexSection {
