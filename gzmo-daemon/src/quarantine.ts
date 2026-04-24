@@ -61,7 +61,7 @@ export async function createRepairTask(params: {
 }): Promise<void> {
   const tasks: AutoTaskSpec[] = [{
     type: "maintenance",
-    title,
+    title: params.title,
     body: [
       `Reason: ${params.reason}`,
       `Quarantine: \`GZMO/Quarantine/${params.quarantineFile}\``,
