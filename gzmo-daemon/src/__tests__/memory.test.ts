@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 describe("TaskMemory", () => {
-  const tmpFilePath = join(tmpdir(), "malformed_memory.json");
+  const tmpFilePath = join(tmpdir(), `malformed_memory_${Date.now()}_${Math.random().toString(36).substring(7)}.json`);
 
   afterAll(() => {
     try {
