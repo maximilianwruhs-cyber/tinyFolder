@@ -1,5 +1,5 @@
 import { join, relative, resolve, basename, extname } from "path";
-import { readdirSync, readFileSync } from "fs";
+import { readdir } from "fs/promises";
 import matter from "gray-matter";
 import { atomicWriteText } from "./vault_fs";
 import { appendWikiLogEntry } from "./wiki_log";
@@ -27,14 +27,14 @@ function isoDate(date = new Date()): string {
   return date.toISOString().slice(0, 10);
 }
 
-function walkMdFiles(root: string): string[] {
+async function walkMdFiles(root: string): Promise<string[]> {
   const out: string[] = [];
   const stack: string[] = [root];
   while (stack.length) {
     const dir = stack.pop()!;
     let entries;
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      entries = await readdir(dir, { withFileTypes: true });
     } catch {
       continue;
     }
@@ -86,7 +86,7 @@ function parseDateMaybe(v: unknown): number | null {
 export async function runWikiLint(vaultPath: string, opts?: { staleDays?: number }): Promise<WikiLintReport> {
   const staleDays = opts?.staleDays ?? 30;
   const wikiRoot = join(vaultPath, "wiki");
-  const files = walkMdFiles(wikiRoot);
+  const files = await walkMdFiles(wikiRoot);
 
   const findings: WikiLintFinding[] = [];
   const autoFixEnabled = process.env.WIKI_LINT_AUTOFIX === "1";
@@ -103,37 +103,53 @@ export async function runWikiLint(vaultPath: string, opts?: { staleDays?: number
   const pageByBase = new Map<string, string>();
   const allPages: Array<{ abs: string; rel: string; base: string; content: string; data: any }> = [];
 
-  for (const abs of files) {
-    const rel = relative(resolve(vaultPath), resolve(abs)).replace(/\\/g, "/");
-    const base = basename(abs, extname(abs));
-    let content = "";
-    try {
-      content = readFileSync(abs, "utf-8");
-    } catch {
-      continue;
-    }
-    const parsed = matter(content);
-    const data = parsed.data;
-    allPages.push({ abs, rel, base, content, data });
-    if (!pageByBase.has(base)) pageByBase.set(base, rel);
+  const pageResults = await Promise.all(
+    files.map(async (abs) => {
+      const rel = relative(resolve(vaultPath), resolve(abs)).replace(/\\/g, "/");
+      const base = basename(abs, extname(abs));
+      try {
+        const content = await Bun.file(abs).text();
+        const parsed = matter(content);
+        const data = parsed.data;
 
-    // Frontmatter checks
-    if (!isContractExempt(rel, base)) {
-      if (!String(content).trimStart().startsWith("---")) {
-        findings.push({ kind: "missing_frontmatter", page: rel, details: "No YAML frontmatter block found." });
-      } else if (!requiredFrontmatterOk(data)) {
-        findings.push({ kind: "invalid_frontmatter", page: rel, details: "Missing required keys (title/type/tags/sources/created/updated)." });
-      }
-    }
+        const localFindings: WikiLintFinding[] = [];
+        // Frontmatter checks
+        if (!isContractExempt(rel, base)) {
+          if (!String(content).trimStart().startsWith("---")) {
+            localFindings.push({ kind: "missing_frontmatter", page: rel, details: "No YAML frontmatter block found." });
+          } else if (!requiredFrontmatterOk(data)) {
+            localFindings.push({
+              kind: "invalid_frontmatter",
+              page: rel,
+              details: "Missing required keys (title/type/tags/sources/created/updated).",
+            });
+          }
+        }
 
-    // Stale checks
-    const updatedTs = parseDateMaybe(data?.updated);
-    if (updatedTs) {
-      const ageDays = (Date.now() - updatedTs) / (1000 * 60 * 60 * 24);
-      if (ageDays > staleDays) {
-        findings.push({ kind: "stale", page: rel, details: `updated=${String(data.updated)} (> ${staleDays} days)` });
+        // Stale checks
+        const updatedTs = parseDateMaybe(data?.updated);
+        if (updatedTs) {
+          const ageDays = (Date.now() - updatedTs) / (1000 * 60 * 60 * 24);
+          if (ageDays > staleDays) {
+            localFindings.push({ kind: "stale", page: rel, details: `updated=${String(data.updated)} (> ${staleDays} days)` });
+          }
+        }
+
+        return {
+          page: { abs, rel, base, content, data },
+          findings: localFindings,
+        };
+      } catch {
+        return null;
       }
-    }
+    }),
+  );
+
+  for (const r of pageResults) {
+    if (!r) continue;
+    allPages.push(r.page);
+    findings.push(...r.findings);
+    if (!pageByBase.has(r.page.base)) pageByBase.set(r.page.base, r.page.rel);
   }
 
   // Link graph: inbound counts + broken links
