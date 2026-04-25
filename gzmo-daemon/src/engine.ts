@@ -18,11 +18,14 @@ import type { ChaosSnapshot } from "./types";
 import { Phase } from "./types";
 import type { PulseLoop } from "./pulse";
 import type { EmbeddingStore } from "./embeddings";
-import { searchVault, formatSearchContext } from "./search";
+import { searchVaultHybrid } from "./search";
 import { TaskMemory } from "./memory";
 import { safeWriteText } from "./vault_fs";
 import { gatherLocalFacts } from "./local_facts";
 import { selfEvalAndRewrite } from "./self_eval";
+import { gatherVaultStateIndex } from "./vault_state_index";
+import { compileEvidencePacket, renderEvidencePacket, type EvidencePacket } from "./evidence_packet";
+import { verifySafety } from "./verifier_safety";
 
 // ── Configuration ──────────────────────────────────────────
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
@@ -103,9 +106,10 @@ function buildSystemPrompt(
     prompt += [
       "",
       "Grounding rules (when context is provided):",
-      "- Treat 'Local Facts (deterministic)' and 'Relevant Vault Context' as the only allowed evidence sources.",
-      "- For each non-trivial claim, cite evidence by quoting or pointing to the exact file/path shown in the context.",
+      "- Treat the 'Evidence Packet' as the only allowed evidence source.",
+      "- For each non-trivial claim, cite evidence by ID like [E2].",
       "- If evidence is missing, say 'insufficient evidence' and suggest the next deterministic check.",
+      "- Never claim you wrote/changed files unless the evidence packet contains it explicitly.",
       "",
       vaultContext,
     ].join("\n");
@@ -126,6 +130,14 @@ function readBoolEnv(name: string, defaultValue: boolean): boolean {
   if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
   if (v === "0" || v === "false" || v === "no" || v === "off") return false;
   return defaultValue;
+}
+
+function readIntEnv(name: string, defaultValue: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return defaultValue;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return defaultValue;
+  return Math.max(min, Math.min(max, n));
 }
 
 // ── Standalone Inference (for DreamEngine / SelfAsk) ────────
@@ -182,22 +194,32 @@ export async function processTask(
 
     // 2. Build context based on action
     let vaultContext: string | undefined;
+    let evidencePacket: EvidencePacket | undefined;
 
     if (action === "search" && embeddingStore) {
-      // Add deterministic local facts for ops/system questions (prevents RAG blind spots).
+      const enableV2 = readBoolEnv("GZMO_PIPELINE_V2", true);
+      // Deterministic grounding: ops facts + vault state index (prevents RAG blind spots).
       const vaultRoot = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? resolve(filePath, "../../..");
-      const localFacts = await gatherLocalFacts({ vaultPath: vaultRoot, query: body }).catch(() => "");
+      const [localFacts, vaultIndex] = await Promise.all([
+        gatherLocalFacts({ vaultPath: vaultRoot, query: body }).catch(() => ""),
+        gatherVaultStateIndex({ vaultPath: vaultRoot, query: body }).catch(() => ""),
+      ]);
 
-      // Vault search: find relevant chunks before answering
-      const results = await searchVault(body, embeddingStore, OLLAMA_API_URL, 3);
+      // Hybrid retrieval: semantic + lexical.
+      const topK = readIntEnv("GZMO_TOPK", 6, 1, 20);
+      const results = enableV2 ? await searchVaultHybrid(body, embeddingStore, OLLAMA_API_URL, topK) : [];
       if (results.length > 0) {
-        vaultContext = (localFacts ? localFacts + "\n" : "") + formatSearchContext(results);
         console.log(`[ENGINE] Found ${results.length} vault chunks (top: ${(results[0]!.score * 100).toFixed(0)}%)`);
+      }
 
-      }
-      if (!vaultContext && localFacts) {
-        vaultContext = localFacts;
-      }
+      const enableEvidence = readBoolEnv("GZMO_EVIDENCE_PACKET", true);
+      evidencePacket = compileEvidencePacket({
+        localFacts: [localFacts, vaultIndex].filter(Boolean).join("\n"),
+        results,
+        maxSnippets: readIntEnv("GZMO_EVIDENCE_MAX_SNIPPETS", 10, 1, 20),
+        maxSnippetChars: readIntEnv("GZMO_EVIDENCE_MAX_CHARS", 900, 200, 4000),
+      });
+      vaultContext = enableEvidence ? renderEvidencePacket(evidencePacket) : [localFacts, vaultIndex].filter(Boolean).join("\n");
     }
 
     // 3. Get chaos snapshot for full parameter modulation
@@ -266,6 +288,20 @@ export async function processTask(
         }
       } catch {
         // non-fatal
+      }
+    }
+
+    // Safety verifier (pass B): block invented paths / side-effect claims.
+    if (action === "search" && evidencePacket && readBoolEnv("GZMO_VERIFY_SAFETY", true)) {
+      const verdict = verifySafety({ answer: fullText, packet: evidencePacket });
+      if (verdict) {
+        fullText = [
+          "insufficient evidence to answer safely.",
+          "",
+          `Reason: ${verdict}`,
+          "",
+          "Next deterministic check: inspect the paths/snippets shown in the Evidence Packet.",
+        ].join("\n");
       }
     }
 
