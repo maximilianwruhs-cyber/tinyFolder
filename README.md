@@ -17,6 +17,7 @@ This README is written as a **setup + operations playbook** so any agent (human 
 
 ## Table of contents
 
+- [First 5 minutes (copy/paste checklist)](#first-5-minutes-copypaste-checklist)
 - [Mental model](#mental-model)
 - [Prerequisites](#prerequisites)
 - [Install](#install)
@@ -31,6 +32,60 @@ This README is written as a **setup + operations playbook** so any agent (human 
 - [Troubleshooting](#troubleshooting)
 - [Repo contents (what is public)](#repo-contents-what-is-public)
 - [License](#license)
+
+---
+
+## First 5 minutes (copy/paste checklist)
+
+Goal: get from zero to a verified end-to-end loop (**Inbox → claim → append output**) with the smallest possible surface area.
+
+1) Start Ollama:
+
+```bash
+OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_FLASH_ATTENTION=1 OLLAMA_KEEP_ALIVE=-1 ollama serve
+```
+
+2) Install deps:
+
+```bash
+cd gzmo-daemon
+bun install
+```
+
+3) Point the daemon at your vault:
+
+```bash
+cat > .env <<'EOF'
+VAULT_PATH="/absolute/path/to/your/vault"
+OLLAMA_URL="http://localhost:11434"
+OLLAMA_MODEL="hermes3:8b"
+EOF
+```
+
+4) Create the minimum vault scaffold:
+
+```bash
+mkdir -p "/absolute/path/to/your/vault/GZMO/Inbox"
+mkdir -p "/absolute/path/to/your/vault/GZMO/Subtasks"
+mkdir -p "/absolute/path/to/your/vault/GZMO/Thought_Cabinet"
+mkdir -p "/absolute/path/to/your/vault/GZMO/Quarantine"
+mkdir -p "/absolute/path/to/your/vault/wiki"
+```
+
+5) Run the daemon (foreground):
+
+```bash
+cd gzmo-daemon
+bun run summon
+```
+
+6) Drop the golden minimal task:
+
+- Follow the section: [Golden minimal task (end-to-end verification)](#golden-minimal-task-end-to-end-verification)
+
+Expected success signal:
+- the daemon changes `status: pending → processing → completed`
+- and appends an answer block to the same file
 
 ---
 
@@ -213,6 +268,38 @@ systemctl --user restart gzmo-daemon
 ---
 
 ## Submit tasks (Inbox contract)
+
+### Golden minimal task (end-to-end verification)
+
+This is the smallest task that verifies the entire pipeline:
+- filesystem watcher sees the file
+- the daemon claims it
+- LLM inference runs
+- the daemon appends output and marks completion
+
+Create this exact file:
+
+- Path: `"$VAULT_PATH/GZMO/Inbox/000_golden_minimal_task.md"`
+
+Contents:
+
+```yaml
+---
+status: pending
+action: think
+---
+Reply with exactly this single line and nothing else:
+OK: inbox → claim → append → done
+```
+
+What “pass” looks like (deterministic checks):
+- The daemon updates the file frontmatter to `status: completed` (or `failed` if something broke).
+- The daemon appends output containing the exact string:
+  - `OK: inbox → claim → append → done`
+
+If it fails:
+- If status becomes `failed`, inspect daemon logs (foreground terminal or `journalctl --user -u gzmo-daemon -f`).
+- If the file stays `pending`, the watcher is not seeing the inbox (almost always `VAULT_PATH` wrong, or permissions).
 
 ### Task file format
 
