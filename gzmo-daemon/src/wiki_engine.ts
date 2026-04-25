@@ -28,6 +28,14 @@ import { rebuildWikiIndex } from "./wiki_index";
 import { createAutoInboxTasks, parseTypedNextAction, type AutoTaskSpec } from "./auto_tasks";
 import { assessWikiDraft, quarantineArtifact, createRepairTask } from "./quarantine";
 import { writeOpsOutputsIndex } from "./wiki_ops_index";
+import { compileEvidencePacket, renderEvidencePacket } from "./evidence_packet";
+import { selfEvalAndRewrite } from "./self_eval";
+import { verifySafety } from "./verifier_safety";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+
+const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "hermes3:8b";
+const ollama = createOpenAICompatible({ name: "ollama", baseURL: OLLAMA_BASE_URL });
 
 // ── Types ──────────────────────────────────────────────────
 interface ConsolidationResult {
@@ -207,7 +215,7 @@ export class WikiEngine {
         .join("\n\n");
 
       // Search vault for related existing wiki content
-      let existingContext = "";
+      let existingResults: any[] = [];
       if (embeddingStore && ollamaApiUrl) {
         try {
           const searchResults = await searchVault(
@@ -216,32 +224,36 @@ export class WikiEngine {
             ollamaApiUrl,
             2,
           );
-          if (searchResults.length > 0) {
-            existingContext = `\n\nExisting wiki knowledge on this topic:\n${formatSearchContext(searchResults)}`;
-          }
+          existingResults = searchResults;
         } catch {}
       }
+
+      const packet = compileEvidencePacket({
+        localFacts: `CABINET ENTRIES (ground truth):\n${entryContext}`,
+        results: existingResults,
+        maxSnippets: 10,
+        maxSnippetChars: 900,
+      });
+      const evidence = renderEvidencePacket(packet);
 
       const systemPrompt = [
         "You are GZMO's Wiki Engine.",
         "Your job is to CONSOLIDATE the provided cabinet entries into a wiki page.",
         "",
         "Hard constraints:",
-        "- Be extractive and grounded: ONLY use information present in the provided entries and the optional EXISTING CONTEXT block.",
+        "- Be extractive and grounded: ONLY use information present in the Evidence Packet.",
         "- Do NOT use outside knowledge. Do NOT add generic filler or marketing language.",
-        "- Every non-trivial claim must be supported by an explicit quote or datum from the entries.",
+        "- Every non-trivial claim must be supported by an explicit quote or datum from the Evidence Packet and cited by [E#].",
         "- If the entries are too thin, produce a short page that says so and list what information is missing.",
         "",
         "Output format constraints:",
         "- Markdown only.",
         "- The wiki contract will normalize frontmatter; you may include frontmatter but keep it minimal.",
         "",
-        ...(existingContext ? ["EXISTING CONTEXT (may be used, also grounded):", existingContext] : []),
+        evidence,
       ].join("\n");
 
       const prompt = `The following ${catEntries.length} cabinet entries are from category "${category}". Consolidate them into a single wiki article.
-
-${entryContext}
 
 Required structure (Markdown):
 
@@ -265,8 +277,29 @@ Rules:
       ].join("\n");
 
       try {
-        const article = await infer(systemPrompt, promptWithTaskTypes);
+        let article = await infer(systemPrompt, promptWithTaskTypes);
         if (article.length < 50) continue;
+
+        // Optional verifier passes (cheap honesty boost).
+        if (String(process.env.GZMO_ENABLE_SELF_EVAL ?? "on").toLowerCase() !== "off") {
+          try {
+            const { rewritten } = await selfEvalAndRewrite({
+              model: ollama(OLLAMA_MODEL),
+              userPrompt: `Wiki consolidation category=${category}.`,
+              answer: article,
+              context: evidence,
+              maxTokens: 260,
+            });
+            if (rewritten && rewritten.length > 50) article = rewritten;
+          } catch {}
+        }
+        if (String(process.env.GZMO_VERIFY_SAFETY ?? "on").toLowerCase() !== "off") {
+          const verdict = verifySafety({ answer: article, packet });
+          if (verdict) {
+            // Fail closed: quarantine will catch it; make the failure explicit.
+            article = `# Wiki draft rejected\n\ninsufficient evidence to produce a safe draft.\n\nReason: ${verdict}\n`;
+          }
+        }
 
         const qualityCheck = assessWikiDraft(article);
         if (!qualityCheck.ok) {

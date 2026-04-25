@@ -24,10 +24,19 @@
 
 import { mkdirSync, promises as fsp } from "fs";
 import * as path from "path";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { EmbeddingStore } from "./embeddings";
 import type { ChaosSnapshot } from "./types";
 import { searchVault, formatSearchContext, type SearchResult } from "./search";
 import { createAutoInboxTasks, parseTypedNextAction, type AutoTaskSpec } from "./auto_tasks";
+import { compileEvidencePacket, renderEvidencePacket, type EvidencePacket } from "./evidence_packet";
+import { selfEvalAndRewrite } from "./self_eval";
+import { verifySafety } from "./verifier_safety";
+import { scoreSelfAskOutput } from "./self_ask_quality";
+
+const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "hermes3:8b";
+const ollama = createOpenAICompatible({ name: "ollama", baseURL: OLLAMA_BASE_URL });
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -235,10 +244,31 @@ export class SelfAskEngine {
       const honeypot = `Topic A (${seed.file} — ${seed.heading}):\n${conceptsA}\n\nTopic B (${partner.file} — ${partner.heading}):\n${conceptsB}`;
 
       // Aggregation: find connections between the extracted concepts
-      const result = await infer(
+      const packet = this.buildEvidencePacketFromResults([
+        { file: seed.file, heading: seed.heading, text: seed.text, score: 1, metadata: seed.metadata },
+        { file: partner.file, heading: partner.heading, text: partner.text, score: 0.98, metadata: partner.metadata },
+      ]);
+      const system = [
         CFD_GAP_SYSTEM,
-        `TOPIC A:\n${seed.text.slice(0, 600)}\nKey concepts: ${conceptsA}\n\nTOPIC B:\n${partner.text.slice(0, 600)}\nKey concepts: ${conceptsB}\n\nIdentify factual connections between Topic A and Topic B. Reference specific shared terms.`,
-      );
+        "",
+        "OUTPUT TEMPLATE (fill slots; keep under 140 words):",
+        "- Shared terms (3-7): <comma-separated terms copied verbatim from evidence>",
+        "- Connection claim (1 sentence): <must be grounded>",
+        "- Evidence:",
+        "  - [E#] \"<verbatim quote>\"",
+        "  - [E#] \"<verbatim quote>\"",
+        "- Confidence: High|Medium|Low",
+        "",
+        renderEvidencePacket(packet),
+      ].join("\n");
+      const result = await infer(system, [
+        "Task: connect Topic A and Topic B using ONLY the Evidence Packet.",
+        "Hard rules:",
+        "- You MUST fill every slot in the template.",
+        "- Shared terms MUST be copied verbatim from evidence.",
+        "- Evidence quotes MUST be exact substrings of the snippets.",
+        "- If you cannot produce two exact evidence quotes, output exactly: \"No connection found.\"",
+      ].join("\n"));
 
       this.taskCount++;
 
@@ -248,7 +278,7 @@ export class SelfAskEngine {
 
       // Write result to Thought Cabinet
       const vaultPath = await this.writeSelfAskEntry(
-        "gap_detective", result, relatedFiles, honeypot
+        "gap_detective", result, relatedFiles, honeypot, packet
       );
 
       return {
@@ -312,7 +342,8 @@ export class SelfAskEngine {
       const fullReport: string[] = [];
       for (const claim of claimLines) {
         const results = await searchVault(claim, store, ollamaUrl, 3);
-        const context = formatSearchContext(results);
+        const packet = compileEvidencePacket({ localFacts: "", results, maxSnippets: 6, maxSnippetChars: 900 });
+        const context = renderEvidencePacket(packet);
 
         if (!context) {
           fullReport.push(`${claim} → No Information (no vault matches)`);
@@ -320,8 +351,13 @@ export class SelfAskEngine {
         }
 
         const verdict = await infer(
-          CFD_CONTRADICTION_SYSTEM,
-          `VAULT CONTEXT:\n${context}\n\nSTATEMENT TO VERIFY:\n${claim.replace(/^\d+[\.\)]\s*/, "")}`,
+          [
+            CFD_CONTRADICTION_SYSTEM,
+            "",
+            "If you output Supported/Contradicted, append a citation like: Supported [E2].",
+            "If evidence is insufficient, output: No Information.",
+          ].join("\n"),
+          `EVIDENCE PACKET:\n${context}\n\nSTATEMENT TO VERIFY:\n${claim.replace(/^\d+[\.\)]\s*/, "")}`,
         );
 
         const cleanVerdict = verdict.trim().split("\n")[0]!.trim();
@@ -407,10 +443,28 @@ export class SelfAskEngine {
       );
 
       // Aggregation: connect old entry to recent activity
-      const result = await infer(
+      const packet = this.buildEvidencePacketFromResults([
+        { file: oldChunk.file, heading: oldChunk.heading, text: oldChunk.text, score: 1, metadata: oldChunk.metadata },
+        ...recentResults.map((r) => ({ ...r, score: Math.max(0.3, r.score) })),
+      ]);
+      const system = [
         CFD_SPACED_SYSTEM,
-        `OLD ENTRY (${oldChunk.file} — ${oldChunk.heading}):\n${oldChunk.text.slice(0, 800)}\n\nRECENT CONTEXT:\n${recentContext || "No recent related activity found."}\n\nDoes any recent activity relate to this older entry? If yes, explain the specific connection.`,
-      );
+        "",
+        "OUTPUT TEMPLATE (fill slots; keep under 140 words):",
+        "- Old anchor: <one short phrase copied verbatim from [E#]>",
+        "- Recent anchor: <one short phrase copied verbatim from [E#]>",
+        "- Connection claim (1 sentence): <grounded>",
+        "- Evidence:",
+        "  - [E#] \"<verbatim quote>\"",
+        "  - [E#] \"<verbatim quote>\"",
+        "- Confidence: High|Medium|Low",
+        "",
+        renderEvidencePacket(packet),
+      ].join("\n");
+      const result = await infer(system, [
+        "Task: connect OLD and RECENT using ONLY evidence snippets. If no connection exists, output exactly: \"No recent connections.\"",
+        "If you cannot produce two exact quotes, output exactly: \"No recent connections.\"",
+      ].join("\n"));
 
       this.taskCount++;
 
@@ -420,8 +474,11 @@ export class SelfAskEngine {
       ];
 
       const vaultPath = await this.writeSelfAskEntry(
-        "spaced_repetition", result, [...new Set(relatedFiles)],
-        `Re-visited: ${oldChunk.file}\nHeading: ${oldChunk.heading}`
+        "spaced_repetition",
+        result,
+        [...new Set(relatedFiles)],
+        `Re-visited: ${oldChunk.file}\nHeading: ${oldChunk.heading}`,
+        packet
       );
 
       return {
@@ -444,6 +501,7 @@ export class SelfAskEngine {
     output: string,
     relatedFiles: string[],
     honeypotData: string,
+    packet?: EvidencePacket,
   ): Promise<string> {
     const cabinetDir = path.join(this.vaultPath, "GZMO", "Thought_Cabinet");
     try { mkdirSync(cabinetDir, { recursive: true }); } catch {}
@@ -456,7 +514,51 @@ export class SelfAskEngine {
 
     const wikiLinks = [...new Set(relatedFiles)].map(f => `- [[${f}]]`);
 
-    const assessment = assessSelfAskOutput(strategy, output, relatedFiles);
+    let finalOutput = output;
+    let selfCheckMd = "";
+
+    if (packet && String(process.env.GZMO_ENABLE_SELF_EVAL ?? "on").toLowerCase() !== "off") {
+      try {
+        const rendered = renderEvidencePacket(packet);
+        const { rewritten, report } = await selfEvalAndRewrite({
+          model: ollama(OLLAMA_MODEL),
+          userPrompt: `Self-Ask strategy=${strategy}.`,
+          answer: finalOutput,
+          context: rendered,
+          maxTokens: 220,
+        });
+        if (rewritten && rewritten.length >= 20) finalOutput = rewritten;
+        if (report) {
+          selfCheckMd = [
+            "",
+            "<details>",
+            "<summary>Self-check</summary>",
+            "",
+            report.trim(),
+            "",
+            "</details>",
+          ].join("\n");
+        }
+      } catch {
+        // non-fatal
+      }
+    }
+
+    if (packet && String(process.env.GZMO_VERIFY_SAFETY ?? "on").toLowerCase() !== "off") {
+      const verdict = verifySafety({ answer: finalOutput, packet });
+      if (verdict) {
+        finalOutput = [
+          "insufficient evidence to produce a safe connection.",
+          "",
+          `Reason: ${verdict}`,
+          "",
+          "Next: rerun with more evidence or tighten the retrieved snippets.",
+        ].join("\n");
+      }
+    }
+
+    const q = scoreSelfAskOutput({ output: finalOutput, packet });
+    const assessment = assessSelfAskOutput(strategy, finalOutput, relatedFiles);
     // Only actionable assessments produce typed next actions (and thus tasks).
     // For non-actionable outputs, keep human-readable guidance without task typing.
     const nextActions = assessment.signal === "actionable"
@@ -473,13 +575,15 @@ export class SelfAskEngine {
       `time: "${now.toISOString().slice(11, 19)}"`,
       `strategy: ${strategy}`,
       `tags: [self-ask, ${strategy}, autonomous]`,
+      ...(packet ? [`evidence_snippets: ${packet.snippets.length}`, `quality_score: ${q.score}`] : []),
       "---",
       "",
       `# 🔍 Self-Ask: ${this.strategyLabel(strategy)} — ${dateStr} ${now.toISOString().slice(11, 16)} UTC`,
       "",
       "## Result",
       "",
-      output,
+      finalOutput,
+      selfCheckMd,
       "",
       "## Next actions",
       "",
@@ -494,6 +598,7 @@ export class SelfAskEngine {
       "```",
       honeypotData,
       "```",
+      ...(packet ? ["", "## Evidence Packet", "", renderEvidencePacket(packet)] : []),
       "",
       "---",
       `*Generated autonomously by the GZMO Self-Ask Engine (${strategy}).*`,
@@ -516,7 +621,7 @@ export class SelfAskEngine {
             "",
             "Context:",
             "```",
-            output.slice(0, 1200),
+            finalOutput.slice(0, 1200),
             "```",
             "",
             `Assessment: signal=${assessment.signal}; reasons=${assessment.reasons.join("; ") || "(none)"}`,
@@ -538,6 +643,15 @@ export class SelfAskEngine {
       case "contradiction_scan": return "Contradiction Scanner";
       case "spaced_repetition": return "Spaced Repetition";
     }
+  }
+
+  private buildEvidencePacketFromResults(results: SearchResult[]): EvidencePacket {
+    return compileEvidencePacket({
+      localFacts: "",
+      results: results.slice(0, 8),
+      maxSnippets: 8,
+      maxSnippetChars: 900,
+    });
   }
 
   /** Fast cosine similarity using pre-computed magnitudes (O(d) instead of O(2d)). */
