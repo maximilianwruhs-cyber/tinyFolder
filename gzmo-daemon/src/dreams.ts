@@ -9,7 +9,7 @@
  * - separation of supported facts from unverified response claims
  */
 
-import { readFileSync, promises as fsp } from "fs";
+import { promises as fsp } from "fs";
 import * as path from "path";
 import matter from "gray-matter";
 import type { ChaosSnapshot } from "./types";
@@ -74,11 +74,19 @@ export class DreamEngine {
   private vaultPath: string;
   private digestedIds: Set<string>;
   private digestedFilePath: string;
+  private digestedLoaded = false;
+  private digestedLoadPromise: Promise<void> | null = null;
 
   constructor(vaultPath: string) {
     this.vaultPath = vaultPath;
     this.digestedFilePath = path.join(vaultPath, "GZMO", DIGESTED_FILE_NAME);
-    this.digestedIds = this.loadDigested();
+    this.digestedIds = new Set();
+    this.digestedLoadPromise = this.loadDigestedAsync();
+  }
+
+  private async ensureDigestedLoaded(): Promise<void> {
+    if (this.digestedLoaded) return;
+    await (this.digestedLoadPromise ?? this.loadDigestedAsync());
   }
 
   async dream(
@@ -87,6 +95,7 @@ export class DreamEngine {
     store?: EmbeddingStore,
     ollamaUrl?: string,
   ): Promise<DreamResult | null> {
+    await this.ensureDigestedLoaded();
     const task = await this.findUnprocessedTask();
     if (!task) return null;
 
@@ -654,13 +663,19 @@ export class DreamEngine {
     return union === 0 ? 0 : intersection / union;
   }
 
-  private loadDigested(): Set<string> {
+  private async loadDigestedAsync(): Promise<void> {
+    if (this.digestedLoaded) return;
+    this.digestedLoaded = true;
     try {
-      const raw = readFileSync(this.digestedFilePath, "utf-8");
-      const data = JSON.parse(raw);
-      return new Set(data.digested || []);
+      const file = Bun.file(this.digestedFilePath);
+      if (file.size === 0) return;
+      const data = await file.json().catch(() => null) as any;
+      const digested = Array.isArray(data?.digested) ? data.digested : [];
+      for (const id of digested) {
+        if (typeof id === "string" && id) this.digestedIds.add(id);
+      }
     } catch {
-      return new Set();
+      // keep empty
     }
   }
 
