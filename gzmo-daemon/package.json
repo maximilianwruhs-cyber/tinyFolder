@@ -13,7 +13,8 @@
     "autofix:sessions": "bun run autofix_sessions_subset.ts"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
   },
   "peerDependencies": {
     "typescript": "^5"

@@ -6,7 +6,7 @@
  * The daemon remembers what it did.
  */
 
-import { existsSync, readFileSync } from "fs";
+import { existsSync } from "fs";
 import { atomicWriteJson } from "./vault_fs";
 
 export interface MemoryEntry {
@@ -26,7 +26,7 @@ export class TaskMemory {
     this.filePath = filePath;
     // memory.json is written inside the vault under GZMO/ by index.ts
     this.vaultPath = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? "";
-    this.load();
+
   }
 
   /** Record a completed task. */
@@ -68,10 +68,10 @@ export class TaskMemory {
     return this.entries.length;
   }
 
-  private load(): void {
+  public async load(): Promise<void> {
     try {
       if (existsSync(this.filePath)) {
-        this.entries = JSON.parse(readFileSync(this.filePath, "utf-8"));
+        this.entries = JSON.parse(await Bun.file(this.filePath).text());
       }
     } catch {
       this.entries = [];

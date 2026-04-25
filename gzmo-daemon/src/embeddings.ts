@@ -8,7 +8,7 @@
  * Source: Local RAG notebook (NotebookLM)
  */
 
-import { existsSync, readdirSync } from "fs";
+import { existsSync, promises as fsp } from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import matter from "gray-matter";
@@ -182,7 +182,7 @@ export async function syncEmbeddings(
   }
 
   // Scan vault for .md files in configured folders
-  const files = findMarkdownFiles(vaultPath);
+  const files = await findMarkdownFiles(vaultPath);
   let embedded = 0;
   let skipped = 0;
   const newChunks: EmbeddingChunk[] = [];
@@ -202,6 +202,8 @@ export async function syncEmbeddings(
 
     const chunks = chunkMarkdown(content, file);
     const metadata = extractMetadata(content, file);
+
+    const chunksToEmbed: { chunk: typeof chunks[number]; hash: string }[] = [];
 
     for (const chunk of chunks) {
       const hash = hashContent(chunk.text);
@@ -224,24 +226,33 @@ export async function syncEmbeddings(
         continue;
       }
 
-      // Embed new chunk
-      try {
-        const vector = await embedText(chunk.text, ollamaUrl);
-        newChunks.push({
-          file,
-          heading: chunk.heading,
-          text: chunk.text.slice(0, 500), // store truncated for space
-          hash,
-          vector,
-          magnitude: vectorMagnitude(vector),
-          updatedAt: new Date().toISOString(),
-          metadata,
-        });
-        embedded++;
-      } catch (err) {
-        console.warn(`[EMBED] Failed to embed chunk from ${file}:`, err);
-        failedFiles.add(file);
-      }
+      chunksToEmbed.push({ chunk, hash });
+    }
+
+    const concurrencyStr = process.env.EMBED_CONCURRENCY || "4";
+    const concurrency = parseInt(concurrencyStr, 10) || 4;
+
+    for (let i = 0; i < chunksToEmbed.length; i += concurrency) {
+      const batch = chunksToEmbed.slice(i, i + concurrency);
+      await Promise.all(batch.map(async ({ chunk, hash }) => {
+        try {
+          const vector = await embedText(chunk.text, ollamaUrl);
+          newChunks.push({
+            file,
+            heading: chunk.heading,
+            text: chunk.text.slice(0, 500), // store truncated for space
+            hash,
+            vector,
+            magnitude: vectorMagnitude(vector),
+            updatedAt: new Date().toISOString(),
+            metadata,
+          });
+          embedded++;
+        } catch (err) {
+          console.warn(`[EMBED] Failed to embed chunk from ${file}:`, err);
+          failedFiles.add(file);
+        }
+      }));
     }
   }
 
@@ -304,22 +315,28 @@ export async function embedSingleFile(
   const metadata = extractMetadata(content, relPath);
   const nextChunks: EmbeddingChunk[] = [];
   let failed = 0;
-  for (const chunk of chunks) {
-    try {
-      const vector = await embedText(chunk.text, ollamaUrl);
-      nextChunks.push({
-        file: relPath,
-        heading: chunk.heading,
-        text: chunk.text.slice(0, 500),
-        hash: hashContent(chunk.text),
-        vector,
-        magnitude: vectorMagnitude(vector),
-        updatedAt: new Date().toISOString(),
-        metadata,
-      });
-    } catch {
-      failed++;
-    }
+  const concurrencyStr = process.env.EMBED_CONCURRENCY || "4";
+  const concurrency = parseInt(concurrencyStr, 10) || 4;
+
+  for (let i = 0; i < chunks.length; i += concurrency) {
+    const batch = chunks.slice(i, i + concurrency);
+    await Promise.all(batch.map(async (chunk) => {
+      try {
+        const vector = await embedText(chunk.text, ollamaUrl);
+        nextChunks.push({
+          file: relPath,
+          heading: chunk.heading,
+          text: chunk.text.slice(0, 500),
+          hash: hashContent(chunk.text),
+          vector,
+          magnitude: vectorMagnitude(vector),
+          updatedAt: new Date().toISOString(),
+          metadata,
+        });
+      } catch {
+        failed++;
+      }
+    }));
   }
 
   if (failed > 0 && nextChunks.length === 0 && previousChunks.length > 0) {
@@ -412,25 +429,25 @@ export async function removeFileEmbeddings(
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-function findMarkdownFiles(vaultPath: string): string[] {
+async function findMarkdownFiles(vaultPath: string): Promise<string[]> {
   const files: string[] = [];
 
   for (const folder of EMBED_FOLDERS) {
     const folderPath = path.join(vaultPath, folder);
     if (!existsSync(folderPath)) continue;
-    scanDir(folderPath, vaultPath, files);
+    await scanDir(folderPath, vaultPath, files);
   }
 
   return files;
 }
 
-function scanDir(dir: string, root: string, out: string[]): void {
+async function scanDir(dir: string, root: string, out: string[]): Promise<void> {
   try {
-    const entries = readdirSync(dir, { withFileTypes: true });
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory() && !entry.name.startsWith(".")) {
-        scanDir(full, root, out);
+        await scanDir(full, root, out);
       } else if (entry.isFile() && entry.name.endsWith(".md")) {
         out.push(path.relative(root, full));
       }

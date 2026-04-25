@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "fs";
+import { promises as fsp } from "fs";
 import { join, relative, resolve, basename, extname } from "path";
 import matter from "gray-matter";
 import { atomicWriteText } from "./vault_fs";
@@ -19,14 +19,14 @@ function isoDate(date = new Date()): string {
   return date.toISOString().slice(0, 10);
 }
 
-function walkMdFiles(root: string): string[] {
+async function walkMdFiles(root: string): Promise<string[]> {
   const out: string[] = [];
   const stack: string[] = [root];
   while (stack.length) {
     const dir = stack.pop()!;
     let entries;
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch {
       continue;
     }
@@ -71,7 +71,7 @@ export async function rebuildWikiIndex(vaultPath: string, now = new Date()): Pro
   const wikiRoot = join(vaultPath, "wiki");
   const indexPath = join(wikiRoot, "index.md");
 
-  const files = walkMdFiles(wikiRoot)
+  const files = (await walkMdFiles(wikiRoot))
     .filter(p => !p.endsWith(`${join("wiki", "index.md")}`))
     .filter(p => basename(p).toLowerCase() !== "index.md"); // exclude itself
 
@@ -82,7 +82,7 @@ export async function rebuildWikiIndex(vaultPath: string, now = new Date()): Pro
 
     let raw = "";
     try {
-      raw = readFileSync(f, "utf-8");
+      raw = await Bun.file(f).text();
     } catch {
       continue;
     }

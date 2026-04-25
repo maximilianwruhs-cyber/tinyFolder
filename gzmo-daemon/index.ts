@@ -228,6 +228,7 @@ stream.log("🟢 Daemon started. Chaos Engine at 174 BPM.");
 // ── Initialize Task Memory ────────────────────────────────
 const memoryPath = join(VAULT_PATH, "GZMO", "memory.json");
 const memory = new TaskMemory(memoryPath);
+await memory.load();
 console.log(`[MEMORY] Loaded ${memory.count} entries from memory.json`);
 
 // ── Initialize Embeddings (Vault RAG) ──────────────────────
@@ -452,6 +453,7 @@ const wikiEngine = new WikiEngine(VAULT_PATH, srcPath);
 
 // ── Initialize Ingest Engine (raw/ → wiki/sources) ───────────────
 const ingestEngine = new IngestEngine(VAULT_PATH);
+await ingestEngine.init();
 
 // Wiki cycle: runs every 1h, consolidates Thought_Cabinet → wiki/
 const WIKI_BASE_MS = 60 * 60 * 1000;
