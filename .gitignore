@@ -63,6 +63,11 @@ vault/GZMO/vnext_comparison_report.md
 gzmo/doctor-report.*
 gzmo-daemon/doctor-report.*
 
+# repo meta kept local (optional)
+.github/
+CONTRIBUTING.md
+SECURITY.md
+
 # OS / editor
 .DS_Store
 .idea/
