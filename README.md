@@ -1,6 +1,8 @@
 ## 📁 tinyFolder - This isn’t an app. It’s a presence.
 A small intelligence trapped in a folder: feed it a Markdown task, and it answers in place.
 
+
+
 **What this repo is**: a local-first, filesystem-driven AI daemon (Bun + Ollama) that reads **Markdown task files** from your vault inbox, routes them by YAML frontmatter (`action: think | search | chain`), and appends results back into the same files.
 
 **How you “talk” to it**: you don’t use a chat UI. You create a `.md` file in `GZMO/Inbox/` with `status: pending` and an `action`, and the daemon does the rest.
