@@ -22,6 +22,7 @@ import { searchVault, formatSearchContext } from "./search";
 import { TaskMemory } from "./memory";
 import { safeWriteText } from "./vault_fs";
 import { gatherLocalFacts } from "./local_facts";
+import { selfEvalAndRewrite } from "./self_eval";
 
 // ── Configuration ──────────────────────────────────────────
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
@@ -116,6 +117,15 @@ function buildSystemPrompt(
   }
 
   return prompt;
+}
+
+function readBoolEnv(name: string, defaultValue: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) return defaultValue;
+  const v = raw.trim().toLowerCase();
+  if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
+  if (v === "0" || v === "false" || v === "no" || v === "off") return false;
+  return defaultValue;
 }
 
 // ── Standalone Inference (for DreamEngine / SelfAsk) ────────
@@ -227,8 +237,40 @@ export async function processTask(
       console.warn(`[ENGINE] Empty output after think-stripping for: ${fileName}`);
     }
 
+    // Optional self-eval pass (cheap honesty boost) for action: search.
+    // Defaults ON for search, can be disabled via env.
+    let selfCheckBlock = "";
+    if (action === "search" && readBoolEnv("GZMO_ENABLE_SELF_EVAL", true)) {
+      try {
+        const { rewritten, report } = await selfEvalAndRewrite({
+          model: ollama(OLLAMA_MODEL),
+          userPrompt: body,
+          answer: fullText,
+          context: vaultContext,
+          maxTokens: 220,
+        });
+        if (rewritten && rewritten.length >= 20) {
+          fullText = rewritten;
+        }
+        if (report) {
+          selfCheckBlock = [
+            "",
+            "<details>",
+            "<summary>Self-check</summary>",
+            "",
+            report.trim(),
+            "",
+            "</details>",
+            "",
+          ].join("\n");
+        }
+      } catch {
+        // non-fatal
+      }
+    }
+
     // 8. Append the result to the task file
-    const output = `\n---\n\n## GZMO Response\n*${new Date().toISOString()}*\n\n${fullText}`;
+    const output = `\n---\n\n## GZMO Response\n*${new Date().toISOString()}*\n\n${fullText}${selfCheckBlock}`;
     await appendToTask(filePath, output);
 
     // 9. Mark as completed
