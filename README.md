@@ -4,7 +4,8 @@
 
 **How you “talk” to it**: you don’t use a chat UI. You create a `.md` file in `GZMO/Inbox/` with `status: pending` and an `action`, and the daemon does the rest.
 
-This README is written as a **setup + operations playbook** so any agent (human or software) can deterministically:
+This README is written as a **setup + operations playbook** so any agent can deterministically:
+
 - install prerequisites
 - create a correct vault scaffold
 - configure environment variables
@@ -84,6 +85,7 @@ bun run summon
 - Follow the section: [Golden minimal task (end-to-end verification)](#golden-minimal-task-end-to-end-verification)
 
 Expected success signal:
+
 - the daemon changes `status: pending → processing → completed`
 - and appends an answer block to the same file
 
