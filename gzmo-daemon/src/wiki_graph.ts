@@ -1,5 +1,4 @@
 import { join, basename, extname } from "path";
-import { existsSync, readFileSync } from "fs";
 import matter from "gray-matter";
 import { writeSchemaCompliantWikiPage } from "./wiki_contract";
 
@@ -74,9 +73,9 @@ export async function linkSourceIntoWikiPage(params: {
   pageAbs: string;
   sourceSummaryAbs: string;
 }): Promise<{ pageBase: string; title: string }> {
-  if (!existsSync(params.pageAbs)) throw new Error(`Target page missing: ${params.pageAbs}`);
-
-  const pageRaw = readFileSync(params.pageAbs, "utf-8");
+  const file = Bun.file(params.pageAbs);
+  if (file.size === 0) throw new Error(`Target page missing: ${params.pageAbs}`);
+  const pageRaw = await file.text();
   const sourceBase = pageBaseNameFromAbs(params.sourceSummaryAbs);
   const wikilink = `[[${sourceBase}]]`;
 

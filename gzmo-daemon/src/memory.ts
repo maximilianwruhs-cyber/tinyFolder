@@ -6,7 +6,7 @@
  * The daemon remembers what it did.
  */
 
-import { existsSync, readFileSync } from "fs";
+import { existsSync } from "fs";
 import { atomicWriteJson } from "./vault_fs";
 
 export interface MemoryEntry {
@@ -21,12 +21,15 @@ export class TaskMemory {
   private entries: MemoryEntry[] = [];
   private filePath: string;
   private vaultPath: string;
+  private loaded = false;
+  private loadPromise: Promise<void> | null = null;
 
   constructor(filePath: string) {
     this.filePath = filePath;
     // memory.json is written inside the vault under GZMO/ by index.ts
     this.vaultPath = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? "";
-    this.load();
+    // Load asynchronously to avoid blocking daemon boot.
+    this.loadPromise = this.loadAsync();
   }
 
   /** Record a completed task. */
@@ -68,13 +71,19 @@ export class TaskMemory {
     return this.entries.length;
   }
 
-  private load(): void {
+  private async loadAsync(): Promise<void> {
+    if (this.loaded) return;
+    this.loaded = true;
     try {
-      if (existsSync(this.filePath)) {
-        this.entries = JSON.parse(readFileSync(this.filePath, "utf-8"));
+      if (!existsSync(this.filePath)) return;
+      const parsed = await Bun.file(this.filePath).json().catch(() => null);
+      if (Array.isArray(parsed)) {
+        // If entries were already recorded before load finished, merge and keep last N.
+        const merged = [...parsed, ...this.entries] as MemoryEntry[];
+        this.entries = merged.slice(-MAX_ENTRIES);
       }
     } catch {
-      this.entries = [];
+      // keep empty
     }
   }
 

@@ -1,5 +1,5 @@
 import { join } from "path";
-import { existsSync, readFileSync } from "fs";
+import { existsSync } from "fs";
 import * as crypto from "crypto";
 import { safeWriteText, atomicWriteJson } from "./vault_fs";
 import { parseStructuredNextActions } from "./structured";
@@ -43,12 +43,12 @@ function stableId(spec: AutoTaskSpec): string {
   return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 
-function loadDigest(vaultPath: string): AutoTaskDigest {
+async function loadDigest(vaultPath: string): Promise<AutoTaskDigest> {
   const p = join(vaultPath, "GZMO", DIGEST_FILE);
   try {
     if (!existsSync(p)) return { created: [] };
-    const raw = readFileSync(p, "utf-8");
-    const parsed = JSON.parse(raw);
+    const raw = await Bun.file(p).text();
+    const parsed = JSON.parse(raw || "{}");
     return {
       created: Array.isArray(parsed?.created) ? parsed.created : [],
       createdAt: typeof parsed?.createdAt === "object" && parsed?.createdAt ? parsed.createdAt : {},
@@ -120,7 +120,7 @@ export async function createAutoInboxTasks(params: {
   vaultPath: string;
   tasks: AutoTaskSpec[];
 }): Promise<{ created: string[]; skipped: string[] }> {
-  const digest = loadDigest(params.vaultPath);
+  const digest = await loadDigest(params.vaultPath);
   const seen = new Set(digest.created);
   const created: string[] = [];
   const skipped: string[] = [];
