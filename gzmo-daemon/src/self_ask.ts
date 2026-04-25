@@ -28,7 +28,6 @@ import type { EmbeddingStore } from "./embeddings";
 import type { ChaosSnapshot } from "./types";
 import { searchVault, formatSearchContext, type SearchResult } from "./search";
 import { createAutoInboxTasks, parseTypedNextAction, type AutoTaskSpec } from "./auto_tasks";
-import { SMALL_MODEL_AUDITOR_RULES } from "./small_model_rules";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -44,13 +43,6 @@ export interface SelfAskResult {
   timestamp: string;
 }
 
-export interface SelfAskQuality {
-  signal: "none" | "weak" | "actionable";
-  score: number;
-  reasons: string[];
-  nextActions: string[];
-}
-
 // ── Configuration ──────────────────────────────────────────────
 
 const MAX_AUTO_TASKS_PER_CYCLE = 3;
@@ -58,93 +50,10 @@ const MIN_SIMILARITY_GAP = 0.05;  // Floor for gap detective (avoid noise chunks
 const MAX_SIMILARITY_GAP = 0.55;  // Ceiling (above this = too similar, was 0.35 but domain vaults are denser)
 const SPACED_REPETITION_DAYS = 7; // Re-visit entries older than this
 const HONEYPOT_DIR = "GZMO/Thought_Cabinet/honeypots";
-const NO_SIGNAL_PATTERNS = [
-  /\bNo connection found\.?\b/i,
-  /\bNo recent connections\.?\b/i,
-  /\bNo Information\b/i,
-  /\bno vault matches\b/i,
-];
-const UNSUPPORTED_EXTERNAL_PATTERNS = [
-  /\buser_interaction_logs?[_-]/i,
-  /\bsearch_results\.csv\b/i,
-  /\bthird[- ]party apps?\b/i,
-  /\bcloud data backups?\b/i,
-  /\bSpacedRepetition\.log\b/i,
-  /\bdatabase entries?\b/i,
-];
-
-export function assessSelfAskOutput(
-  strategy: SelfAskStrategy,
-  output: string,
-  relatedFiles: string[],
-): SelfAskQuality {
-  const normalized = output.trim();
-  const reasons: string[] = [];
-  let score = 0;
-
-  if (!normalized || normalized.length < 40) reasons.push("too short");
-  else score += 15;
-
-  if (NO_SIGNAL_PATTERNS.some((pattern) => pattern.test(normalized))) {
-    reasons.push("explicit no-signal result");
-    return { signal: "none", score: 0, reasons, nextActions: [] };
-  }
-
-  if (UNSUPPORTED_EXTERNAL_PATTERNS.some((pattern) => pattern.test(normalized))) {
-    reasons.push("mentions unsupported external evidence");
-  } else {
-    score += 15;
-  }
-
-  const uniqueFiles = [...new Set(relatedFiles.filter(Boolean))];
-  if (uniqueFiles.length >= 2) score += 20;
-  else reasons.push("too few vault anchors");
-
-  if (strategy === "contradiction_scan") {
-    const contradicted = (normalized.match(/→\s*Contradicted\b/g) ?? []).length;
-    const supported = (normalized.match(/→\s*Supported\b/g) ?? []).length;
-    if (contradicted > 0) score += 35;
-    else if (supported >= 2) score += 20;
-    else reasons.push("no strong verification verdict");
-
-    const source = uniqueFiles[0] ?? "latest self-ask source";
-    if (contradicted > 0 && score >= 60) {
-      return {
-        signal: "actionable",
-        score,
-        reasons,
-        nextActions: [`- [verify] Investigate contradicted claim from ${source} and write the concrete correction.`],
-      };
-    }
-  } else {
-    const hasSpecificConnection = /\b(shared|overlap|connect|because|both|same|links?|relates?)\b/i.test(normalized);
-    if (hasSpecificConnection) score += 25;
-    else reasons.push("no explicit connection rationale");
-
-    if (score >= 70 && uniqueFiles.length >= 2) {
-      const [a, b] = uniqueFiles;
-      return {
-        signal: "actionable",
-        score,
-        reasons,
-        nextActions: [`- [curate] Review and link ${a} with ${b} only if the stated connection is directly supported.`],
-      };
-    }
-  }
-
-  return {
-    signal: score >= 50 ? "weak" : "none",
-    score,
-    reasons,
-    nextActions: [],
-  };
-}
 
 // ── CFD Prompt Templates (Constraints First!) ──────────────────
 
 const CFD_GAP_SYSTEM = `CONSTRAINTS:
-${SMALL_MODEL_AUDITOR_RULES}
-
 - You may ONLY reference information explicitly present in TOPIC A and TOPIC B below.
 - If no connection exists between the two topics, you MUST output exactly: "No connection found."
 - Do NOT invent relationships, terminology, or concepts not present in the text.
@@ -157,8 +66,6 @@ Topic B discusses music production workflows.
 Output: "No connection found."`;
 
 const CFD_CONTRADICTION_SYSTEM = `CONSTRAINTS:
-${SMALL_MODEL_AUDITOR_RULES}
-
 - You must output ONLY one of three exact strings: "Supported", "Contradicted", or "No Information".
 - Only use information explicitly present in the VAULT CONTEXT below.
 - Do NOT use outside general knowledge or parametric memory.
@@ -178,8 +85,6 @@ Missing Anchor: "theta-wave oscillation frequency"
 Output: No Information`;
 
 const CFD_SPACED_SYSTEM = `CONSTRAINTS:
-${SMALL_MODEL_AUDITOR_RULES}
-
 - You may ONLY reference information from the OLD ENTRY and RECENT CONTEXT below.
 - If no connection exists between old and recent content, output exactly: "No recent connections."
 - Do NOT invent relationships.
@@ -432,7 +337,7 @@ export class SelfAskEngine {
         const dreamFiles = entries
             .filter(e => e.isFile() && e.name.endsWith(".md"))
             .map(e => path.join(cabinetDir, e.name));
-        
+
         for (const df of dreamFiles) {
             const stat = await fsp.stat(df);
             if (stat.mtimeMs > cutoff) {
@@ -518,10 +423,11 @@ export class SelfAskEngine {
     const filepath = path.join(cabinetDir, filename);
 
     const wikiLinks = [...new Set(relatedFiles)].map(f => `- [[${f}]]`);
-    const quality = assessSelfAskOutput(strategy, output, relatedFiles);
-    const nextActions = quality.nextActions.length > 0
-      ? quality.nextActions
-      : [`- No autonomous task created: ${quality.reasons.join("; ") || "signal below action threshold"}.`];
+
+    const nextActions = [
+      "- [verify] If this result is actionable, convert it into a concrete inbox task and validate against the vault.",
+      "- [research] If this result is 'No connection found' / 'No Information', tighten query scope or improve source coverage.",
+    ];
 
     const content = [
       "---",
@@ -529,8 +435,6 @@ export class SelfAskEngine {
       `date: ${dateStr}`,
       `time: "${now.toISOString().slice(11, 19)}"`,
       `strategy: ${strategy}`,
-      `quality_score: ${quality.score}`,
-      `signal: ${quality.signal}`,
       `tags: [self-ask, ${strategy}, autonomous]`,
       "---",
       "",
@@ -539,12 +443,6 @@ export class SelfAskEngine {
       "## Result",
       "",
       output,
-      "",
-      "## Quality gate",
-      "",
-      `- signal: ${quality.signal}`,
-      `- score: ${quality.score}`,
-      ...quality.reasons.map((reason) => `- reason: ${reason}`),
       "",
       "## Next actions",
       "",
@@ -565,10 +463,10 @@ export class SelfAskEngine {
     ].join("\n");
 
     await Bun.write(filepath, content);
-    console.log(`[SELF-ASK] Written: ${filename} (signal=${quality.signal}, score=${quality.score})`);
+    console.log(`[SELF-ASK] Written: ${filename}`);
 
-    // Closed loop: only high-signal, typed next actions become inbox tasks.
-    const typed = quality.nextActions
+    // Closed loop: only typed next actions become inbox tasks.
+    const typed = nextActions
       .map((line) => ({ raw: line, parsed: parseTypedNextAction(line.replace(/^-+\s*/, "")) }))
       .filter((x) => x.parsed !== null) as Array<{ raw: string; parsed: { type: any; title: string } }>;
     if (typed.length > 0) {

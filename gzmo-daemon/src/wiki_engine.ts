@@ -149,7 +149,7 @@ export class WikiEngine {
     const entries: { file: string; content: string; category: string }[] = [];
     for (const file of cabinetFiles.slice(0, 30)) { // Cap at 30 to limit context
       try {
-        const content = await Bun.file(join(this.cabinetPath, file)).text();
+        const content = readFileSync(join(this.cabinetPath, file), "utf-8");
         // Extract category from frontmatter (schema-first; avoid regex drift)
         const parsed = matter(content);
         const category = typeof parsed.data?.category === "string" && String(parsed.data.category).trim()
@@ -360,7 +360,7 @@ Rules:
       const files = readdirSync(this.srcPath).filter(f => f.endsWith(".ts"));
       for (const file of files) {
         try {
-          const content = await Bun.file(join(this.srcPath, file)).text();
+          const content = readFileSync(join(this.srcPath, file), "utf-8");
           // Extract just the top comment and exports for a module summary
           const topComment = content.match(/\/\*\*[\s\S]*?\*\//)?.[0] ?? "";
           const exports = content.match(/^export\s+.+$/gm) ?? [];

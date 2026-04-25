@@ -2,8 +2,8 @@
  * GZMO Chaos Engine — Pruning Engine (Purposeful Forgetting)
  *
  * Implements the decay/forgetting phase of the Cascading Honeypot Theorem.
- * Moves successfully digested raw data (tasks) out of the active Inbox and 
- * into a compressed Archive. This prevents unbounded folder growth and keeps 
+ * Moves successfully digested raw data (tasks) out of the active Inbox and
+ * into a compressed Archive. This prevents unbounded folder growth and keeps
  * the active dream ingestion loop lightning fast.
  */
 
@@ -30,7 +30,7 @@ export class PruningEngine {
    */
   async tick(tension: number, energy: number): Promise<void> {
     this.tickCounter++;
-    
+
     // Only prune during low-stress idle time (tension < 30)
     // and if enough time has passed.
     if (this.tickCounter >= this.maxIdleTicks) {
@@ -58,7 +58,7 @@ export class PruningEngine {
 
       const inboxDir = path.join(this.vaultPath, "GZMO", "Inbox");
       const archiveDir = path.join(this.vaultPath, "GZMO", "Archive", "Inbox");
-      
+
       try {
         await fsp.mkdir(archiveDir, { recursive: true });
       } catch {}
@@ -73,7 +73,7 @@ export class PruningEngine {
         if (digestedIds.has(file)) {
           const sourcePath = path.join(inboxDir, file);
           const destPath = path.join(archiveDir, file);
-          
+
           try {
             await fsp.rename(sourcePath, destPath);
             archivedCount++;

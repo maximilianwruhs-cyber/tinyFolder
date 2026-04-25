@@ -156,7 +156,7 @@ try {
     body: `Answer these questions precisely:\n1. What is your name?\n2. Are you a fictional character?\n3. What is your current operational phase?\n4. What runtime environment are you deployed on?\n\nDo NOT fabricate information. If you don't know something, say "unknown".`,
     frontmatter: { status: "pending", action: "think" },
   };
-  await processTask(event, watcher, VAULT_PATH, pulse, store, memory);
+  await processTask(event, watcher, pulse, store, memory);
   const elapsed = Date.now() - t1Start;
   const content = readFileSync(t1File, "utf-8");
   const response = content.match(/## GZMO Response[\s\S]*$/)?.[0] ?? "";
@@ -195,7 +195,7 @@ try {
     body: "Search the vault: What is the PulseLoop and how does the Lorenz attractor influence the chaos engine's behavior? Reference specific technical details from the vault documents.",
     frontmatter: { status: "pending", action: "search" },
   };
-  await processTask(event, watcher, VAULT_PATH, pulse, store, memory);
+  await processTask(event, watcher, pulse, store, memory);
   const elapsed = Date.now() - t2Start;
   const content = readFileSync(t2File, "utf-8");
   const response = content.match(/## GZMO Response[\s\S]*$/)?.[0] ?? "";
@@ -291,7 +291,7 @@ try {
     body: "Step 1: List exactly 3 technical components of the GZMO daemon architecture. Be brief.",
     frontmatter: { status: "pending", action: "chain", chain_next: t4NextFile },
   };
-  await processTask(event, watcher, VAULT_PATH, pulse, store, memory);
+  await processTask(event, watcher, pulse, store, memory);
   const elapsed = Date.now() - t4Start;
 
   // Check if chain file was created

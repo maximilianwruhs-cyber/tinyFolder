@@ -51,4 +51,3 @@ export interface DoctorReport {
   env: DoctorEnvironment;
   steps: DoctorStepResult[];
 }
-

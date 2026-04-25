@@ -22,4 +22,3 @@ describe("wiki_lint", () => {
     expect(out.markdown).toContain("# x");
   });
 });
-

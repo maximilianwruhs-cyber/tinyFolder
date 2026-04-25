@@ -79,4 +79,3 @@ export function parseDoctorFlags(argv = process.argv.slice(2)): DoctorFlags {
 
   return { profile, readonly, writeReports, runLegacy, timeoutMs };
 }
-

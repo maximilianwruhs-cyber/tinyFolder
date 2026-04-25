@@ -94,4 +94,3 @@ export async function writeDoctorReports(params: {
   await Bun.write(jsonPath, params.json);
   return { mdPath, jsonPath };
 }
-

@@ -108,7 +108,7 @@ try {
     body: "GZMO, state your identity and current chaos state. Be concise.",
     frontmatter: { status: "pending", action: "think" },
   };
-  await processTask(event, watcher, VAULT_PATH, pulse, store, memory);
+  await processTask(event, watcher, pulse, store, memory);
   const elapsed = Date.now() - t1;
   const content = fs.readFileSync(thinkFile, "utf-8");
   const responseMatch = content.match(/## GZMO Response[\s\S]*$/);
@@ -149,7 +149,7 @@ try {
     body: "What do you know about the chaos engine and allostasis system?",
     frontmatter: { status: "pending", action: "search" },
   };
-  await processTask(event, watcher, VAULT_PATH, pulse, store, memory);
+  await processTask(event, watcher, pulse, store, memory);
   const elapsed = Date.now() - t2;
   const content = fs.readFileSync(searchFile, "utf-8");
   const responseMatch = content.match(/## GZMO Response[\s\S]*$/);

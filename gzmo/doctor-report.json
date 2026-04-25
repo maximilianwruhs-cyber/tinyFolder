@@ -1,0 +1,132 @@
+{
+  "generatedAt": "2026-04-24T13:45:19.202Z",
+  "profile": "deep",
+  "readonly": true,
+  "writeReports": true,
+  "env": {
+    "cwd": "/app/gzmo-daemon",
+    "vaultPath": "/app/vault",
+    "inboxPath": "/app/vault/GZMO/Inbox",
+    "thoughtCabinetPath": "/app/vault/GZMO/Thought_Cabinet",
+    "embeddingsPath": "/app/vault/GZMO/embeddings.json",
+    "proxy": {}
+  },
+  "steps": [
+    {
+      "id": "runtime.profile",
+      "title": "Runtime profile (safe-mode) visibility",
+      "durationMs": 1,
+      "status": "PASS",
+      "summary": "doctor=deep → implied daemon profile=full",
+      "details": "GZMO_PROFILE env: (unset)\nResolved: full (inboxWatcher=on, taskProcessing=on, embeddingsSync=on, embeddingsLive=on, dreams=on, selfAsk=on, wiki=on, ingest=on, wikiLint=on, pruning=on, dashboardPulse=on)"
+    },
+    {
+      "id": "vault.exists",
+      "title": "Vault path exists",
+      "durationMs": 0,
+      "status": "PASS",
+      "summary": "OK"
+    },
+    {
+      "id": "vault.inbox",
+      "title": "Inbox directory exists",
+      "durationMs": 0,
+      "status": "FAIL",
+      "summary": "Inbox missing",
+      "details": "/app/vault/GZMO/Inbox"
+    },
+    {
+      "id": "ollama.discover",
+      "title": "Discover Ollama endpoint + required models",
+      "durationMs": 13,
+      "status": "FAIL",
+      "summary": "No reachable Ollama endpoint found (tried localhost/127.0.0.1:11434 and preferred URL).",
+      "fix": [
+        {
+          "id": "ollama.serve",
+          "title": "Start Ollama",
+          "severity": "error",
+          "rationale": "Ollama must be running for LLM/embedding checks.",
+          "commands": [
+            "ollama serve"
+          ],
+          "docs": []
+        }
+      ]
+    },
+    {
+      "id": "unit.tests",
+      "title": "Unit tests (bun test)",
+      "durationMs": 3158,
+      "status": "PASS",
+      "summary": "All unit tests passed",
+      "details": "bun test v1.2.14 (6a363a38)\n[PULSE] Started at 174 BPM (345ms, self-correcting)\n[PULSE] Stopped (final snapshot flushed)\n\n\nsrc/__tests__/ingest_engine.test.ts:\n(pass) ingest_engine helpers > sanitizeSlug produces stable lowercase slug [4.04ms]\n(pass) ingest_engine helpers > deriveSourceTitle turns path into human title [0.43ms]\n\nsrc/__tests__/auto_tasks.test.ts:\n(pass) auto_tasks > parseTypedNextAction parses known types [0.36ms]\n(pass) auto_tasks > parseTypedNextAction rejects untyped lines [0.07ms]\n(pass) quarantine assessWikiDraft > rejects drafts without per-entry evidence citations [0.18ms]\n(pass) quarantine assessWikiDraft > accepts drafts with Entry citations [0.05ms]\n\nsrc/__tests__/wiki_graph.test.ts:\n(pass) wiki_graph > adds Sources section if missing [2.57ms]\n(pass) wiki_graph > inserts into existing Sources section [0.38ms]\n(pass) wiki_graph > is idempotent [0.17ms]\n\nsrc/__tests__/regressions.integration.test.ts:\n(pass) regressions (integration) > embedding dedup preserves provenance for identical text in multiple files [2.56ms]\n(pass) regressions (integration) > task_failed event affects tension in next snapshots [3011.36ms]\n\nsrc/__tests__/wiki_lint.test.ts:\n(pass) wiki_lint > extractWikiLinks parses aliases and anchors [0.26ms]\n(pass) wiki_lint > normalization is safe (no HTML allowed, keeps body) [3.06ms]\n\nsrc/__tests__/wiki_contract.test.ts:\n(pass) wiki_contract > adds required frontmatter + H1 and derives type from path [1.17ms]\n(pass) wiki_contract > rejects HTML outside code fences [0.30ms]\n\n 15 pass\n 0 fail\n 33 expect() calls\nRan 15 tests across 6 files. [3.15s]"
+    },
+    {
+      "id": "wiki.lint",
+      "title": "Wiki lint scan (readonly)",
+      "durationMs": 59,
+      "status": "WARN",
+      "summary": "88 findings across 67 pages",
+      "evidencePaths": [
+        "/app/vault/GZMO/wiki-lint-report.md"
+      ],
+      "fix": [
+        {
+          "id": "wiki.lint.review",
+          "title": "Review wiki lint report and apply fixes",
+          "severity": "warn",
+          "rationale": "Doctor runs lint in readonly mode; it only reports.",
+          "commands": [
+            "sed -n '1,200p' \"/app/vault/GZMO/wiki-lint-report.md\""
+          ]
+        }
+      ]
+    },
+    {
+      "id": "embeddings.sync",
+      "title": "Embeddings sync/load",
+      "durationMs": 1,
+      "status": "SKIP",
+      "summary": "Skipped (Ollama unavailable)"
+    },
+    {
+      "id": "embeddings.queue",
+      "title": "Embeddings queue serialization (temp vault)",
+      "durationMs": 1,
+      "status": "SKIP",
+      "summary": "Skipped (Ollama unavailable)"
+    },
+    {
+      "id": "llm.identity",
+      "title": "LLM identity compliance (dry)",
+      "status": "SKIP",
+      "durationMs": 0,
+      "summary": "Skipped (Ollama unavailable)"
+    },
+    {
+      "id": "llm.json",
+      "title": "LLM JSON compliance (dry)",
+      "status": "SKIP",
+      "durationMs": 0,
+      "summary": "Skipped (Ollama unavailable)"
+    },
+    {
+      "id": "write.gated",
+      "title": "Write-enabled checks (Inbox/pipeline/dream/self-ask/wiki-engine)",
+      "status": "SKIP",
+      "durationMs": 0,
+      "summary": "Skipped (run with --write to enable)",
+      "fix": [
+        {
+          "id": "doctor.enable_write",
+          "title": "Run doctor with write-enabled checks",
+          "severity": "info",
+          "commands": [
+            "bun run doctor --write --profile deep"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -342,7 +342,7 @@ try {
       body: "State your name and current phase. Keep it under 40 words.",
       frontmatter: { status: "pending", action: "think" },
     };
-    const { ms } = await withTiming(async () => processTask(ev, watcher, VAULT_PATH, pulse, store, memory));
+    const { ms } = await withTiming(async () => processTask(ev, watcher, pulse, store, memory));
     const content = fs.readFileSync(filePath, "utf-8");
     const response = content.match(/## GZMO Response[\s\S]*$/)?.[0] ?? "";
     const g = gradeOutput(response);
@@ -362,7 +362,7 @@ try {
       body: "From the vault, summarize what PulseLoop does and name 2 state variables it tracks.",
       frontmatter: { status: "pending", action: "search" },
     };
-    const { ms } = await withTiming(async () => processTask(ev, watcher, VAULT_PATH, pulse, store, memory));
+    const { ms } = await withTiming(async () => processTask(ev, watcher, pulse, store, memory));
     const content = fs.readFileSync(filePath, "utf-8");
     const response = content.match(/## GZMO Response[\s\S]*$/)?.[0] ?? "";
     const g = gradeOutput(response);
@@ -381,7 +381,7 @@ try {
       body: "Step 1: List exactly 3 subsystems of GZMO.",
       frontmatter: { status: "pending", action: "chain", chain_next: next },
     };
-    const { ms } = await withTiming(async () => processTask(ev, watcher, VAULT_PATH, pulse, store, memory));
+    const { ms } = await withTiming(async () => processTask(ev, watcher, pulse, store, memory));
     const chainCreated = fs.existsSync(join(INBOX_PATH, next));
     steps.push(chainCreated ? ok("processTask: chain creates next file", ms, next) : fail("processTask: chain creates next file", ms, "missing chain_next file"));
   }
