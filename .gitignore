@@ -17,6 +17,7 @@
 .venv*/
 
 # vault generated / raw imports (can contain secrets)
+vault/
 vault/GZMO/embeddings.json
 vault/raw/
 
@@ -57,6 +58,10 @@ vault/wiki/00_MASTER_INDEX.md
 vault/wiki/Learners.md
 vault/wiki/entities/GZMO-Ops-Outputs.md
 vault/GZMO/vnext_comparison_report.md
+
+# local-only reports (generated)
+gzmo/doctor-report.*
+gzmo-daemon/doctor-report.*
 
 # OS / editor
 .DS_Store
