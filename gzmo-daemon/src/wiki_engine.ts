@@ -16,7 +16,8 @@
  */
 
 import { join, basename } from "path";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
+import { promises as fsp } from "fs";
 import matter from "gray-matter";
 import type { EmbeddingStore } from "./embeddings";
 import { searchVault, formatSearchContext } from "./search";
@@ -51,6 +52,7 @@ export class WikiEngine {
   private readonly digestPath: string;
   private readonly srcPath: string;
   private digest: WikiDigest;
+  private digestLoaded = false;
 
   // Minimum cabinet entries needed before consolidation triggers
   private readonly MIN_CLUSTER_SIZE = 5;
@@ -68,16 +70,33 @@ export class WikiEngine {
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     }
 
-    // Load digest
+    // Load digest lazily (async) to avoid blocking the event loop during daemon boot.
+    this.digest = {
+      consolidated: [],
+      wikiPages: [],
+      lastRun: "",
+      lastIntrospection: "",
+    };
+  }
+
+  private async ensureDigestLoaded(): Promise<void> {
+    if (this.digestLoaded) return;
+    this.digestLoaded = true;
     try {
-      this.digest = JSON.parse(readFileSync(this.digestPath, "utf-8"));
+      const file = Bun.file(this.digestPath);
+      if (file.size === 0) return;
+      const parsed = await file.json();
+      if (parsed && typeof parsed === "object") {
+        const rec = parsed as Partial<WikiDigest>;
+        this.digest = {
+          consolidated: Array.isArray(rec.consolidated) ? rec.consolidated : [],
+          wikiPages: Array.isArray(rec.wikiPages) ? rec.wikiPages : [],
+          lastRun: typeof rec.lastRun === "string" ? rec.lastRun : "",
+          lastIntrospection: typeof rec.lastIntrospection === "string" ? rec.lastIntrospection : "",
+        };
+      }
     } catch {
-      this.digest = {
-        consolidated: [],
-        wikiPages: [],
-        lastRun: "",
-        lastIntrospection: "",
-      };
+      // keep defaults
     }
   }
 
@@ -95,6 +114,7 @@ export class WikiEngine {
     embeddingStore?: EmbeddingStore,
     ollamaApiUrl?: string,
   ): Promise<ConsolidationResult[]> {
+    await this.ensureDigestLoaded();
     const results: ConsolidationResult[] = [];
 
     // Strategy 1: Consolidate Thought Cabinet clusters
@@ -133,9 +153,10 @@ export class WikiEngine {
     // Find all cabinet entries not yet consolidated
     let cabinetFiles: string[];
     try {
-      cabinetFiles = readdirSync(this.cabinetPath)
-        .filter(f => f.endsWith(".md"))
-        .filter(f => !this.digest.consolidated.includes(f));
+      const files = await fsp.readdir(this.cabinetPath);
+      cabinetFiles = files
+        .filter((f) => f.endsWith(".md"))
+        .filter((f) => !this.digest.consolidated.includes(f));
     } catch {
       return results;
     }
@@ -149,7 +170,7 @@ export class WikiEngine {
     const entries: { file: string; content: string; category: string }[] = [];
     for (const file of cabinetFiles.slice(0, 30)) { // Cap at 30 to limit context
       try {
-        const content = readFileSync(join(this.cabinetPath, file), "utf-8");
+        const content = await Bun.file(join(this.cabinetPath, file)).text();
         // Extract category from frontmatter (schema-first; avoid regex drift)
         const parsed = matter(content);
         const category = typeof parsed.data?.category === "string" && String(parsed.data.category).trim()
@@ -357,10 +378,10 @@ Rules:
     // Read source files
     const sourceFiles: { name: string; content: string }[] = [];
     try {
-      const files = readdirSync(this.srcPath).filter(f => f.endsWith(".ts"));
+      const files = (await fsp.readdir(this.srcPath)).filter((f) => f.endsWith(".ts"));
       for (const file of files) {
         try {
-          const content = readFileSync(join(this.srcPath, file), "utf-8");
+          const content = await Bun.file(join(this.srcPath, file)).text();
           // Extract just the top comment and exports for a module summary
           const topComment = content.match(/\/\*\*[\s\S]*?\*\//)?.[0] ?? "";
           const exports = content.match(/^export\s+.+$/gm) ?? [];

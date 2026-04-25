@@ -8,7 +8,8 @@
  * Source: Local RAG notebook (NotebookLM)
  */
 
-import { existsSync, readdirSync } from "fs";
+import { existsSync } from "fs";
+import { promises as fsp } from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import matter from "gray-matter";
@@ -230,7 +231,7 @@ export async function syncEmbeddings(
   }
 
   // Scan vault for .md files in configured folders
-  const files = findMarkdownFiles(vaultPath);
+  const files = await findMarkdownFiles(vaultPath);
   let embedded = 0;
   let skipped = 0;
   const newChunks: EmbeddingChunk[] = [];
@@ -400,26 +401,28 @@ export async function removeFileEmbeddings(
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-function findMarkdownFiles(vaultPath: string): string[] {
+async function findMarkdownFiles(vaultPath: string): Promise<string[]> {
   const files: string[] = [];
 
   for (const folder of EMBED_FOLDERS) {
     const folderPath = path.join(vaultPath, folder);
     if (!existsSync(folderPath)) continue;
-    scanDir(folderPath, vaultPath, files);
+    await scanDir(folderPath, vaultPath, files);
   }
 
   return files;
 }
 
-function scanDir(dir: string, root: string, out: string[]): void {
+async function scanDir(dir: string, root: string, out: string[]): Promise<void> {
   try {
-    const entries = readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
+    const dh = await fsp.opendir(dir);
+    for await (const entry of dh) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory() && !entry.name.startsWith(".")) {
-        scanDir(full, root, out);
-      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+        await scanDir(full, root, out);
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith(".md")) {
         out.push(path.relative(root, full));
       }
     }
