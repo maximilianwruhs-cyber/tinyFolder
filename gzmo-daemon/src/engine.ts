@@ -21,6 +21,7 @@ import type { EmbeddingStore } from "./embeddings";
 import { searchVault, formatSearchContext } from "./search";
 import { TaskMemory } from "./memory";
 import { safeWriteText } from "./vault_fs";
+import { gatherLocalFacts } from "./local_facts";
 
 // ── Configuration ──────────────────────────────────────────
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
@@ -165,12 +166,19 @@ export async function processTask(
     let vaultContext: string | undefined;
 
     if (action === "search" && embeddingStore) {
+      // Add deterministic local facts for ops/system questions (prevents RAG blind spots).
+      const vaultRoot = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? resolve(filePath, "../../..");
+      const localFacts = await gatherLocalFacts({ vaultPath: vaultRoot, query: body }).catch(() => "");
+
       // Vault search: find relevant chunks before answering
       const results = await searchVault(body, embeddingStore, OLLAMA_API_URL, 3);
       if (results.length > 0) {
-        vaultContext = formatSearchContext(results);
+        vaultContext = (localFacts ? localFacts + "\n" : "") + formatSearchContext(results);
         console.log(`[ENGINE] Found ${results.length} vault chunks (top: ${(results[0]!.score * 100).toFixed(0)}%)`);
 
+      }
+      if (!vaultContext && localFacts) {
+        vaultContext = localFacts;
       }
     }
 
