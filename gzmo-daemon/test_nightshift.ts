@@ -1,9 +1,9 @@
 /**
  * test_nightshift.ts — Manual trigger for Dream + Self-Ask engines
- * 
+ *
  * Tests both pipelines with qwen3:4b (non-thinking) model
  * to verify output quality before committing to the nightshift.
- * 
+ *
  * NOTE: Bypasses chaos gating so self-ask runs regardless of tension.
  */
 

@@ -84,19 +84,7 @@ export async function writeHealth(params: {
   profile: string;
   ollamaUrl: string;
   model: string;
-  pulse: {
-    tension: number;
-    energy: number;
-    phase: string;
-    alive: boolean;
-    deaths: number;
-    tick: number;
-    thoughtsIncubating: number;
-    thoughtsCrystallized: number;
-    llmTemperature?: number;
-    llmMaxTokens?: number;
-    llmValence?: number;
-  };
+  pulse: HealthSnapshot["pulse"];
   scheduler: HealthSnapshot["scheduler"];
   counts: HealthSnapshot["counts"];
 }): Promise<void> {

@@ -11,4 +11,3 @@ describe("ingest_engine helpers", () => {
     expect(__testing.deriveSourceTitle("raw/agent-logs/foo_bar-baz.md")).toBe("foo bar baz");
   });
 });
-

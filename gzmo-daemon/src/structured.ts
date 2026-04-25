@@ -1,6 +1,5 @@
-import type { InboxTaskType } from "./auto_tasks";
+import { type InboxTaskType, TASK_TYPES } from "./task_types";
 
-const TASK_TYPES: InboxTaskType[] = ["maintenance", "research", "build", "verify", "curate"];
 
 export interface StructuredNextAction {
   type: InboxTaskType;

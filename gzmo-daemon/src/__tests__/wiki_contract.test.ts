@@ -34,4 +34,3 @@ describe("wiki_contract", () => {
     ).toThrow();
   });
 });
-

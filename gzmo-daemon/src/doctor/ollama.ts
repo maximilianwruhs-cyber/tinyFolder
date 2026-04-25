@@ -142,4 +142,3 @@ export async function ollamaChatJson(params: {
   if (typeof text !== "string") throw new Error("unexpected Ollama response shape");
   return text.trim();
 }
-

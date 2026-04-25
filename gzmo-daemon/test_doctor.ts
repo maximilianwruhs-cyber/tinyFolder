@@ -448,4 +448,3 @@ if (flags.cleanup) {
 
 const { counts } = summarize(steps);
 process.exit(counts.FAIL ? 1 : 0);
-

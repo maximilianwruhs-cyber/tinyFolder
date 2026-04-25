@@ -526,6 +526,19 @@ async function main() {
   const markdown = reportToMarkdown(report);
   const json = JSON.stringify(report, null, 2);
 
+  const counts = steps.reduce(
+    (acc, s) => {
+      acc[s.status] = (acc[s.status] ?? 0) + 1;
+      return acc;
+    },
+    { PASS: 0, WARN: 0, FAIL: 0, SKIP: 0 } as Record<string, number>,
+  );
+  console.log(`Summary: PASS=${counts.PASS} WARN=${counts.WARN} FAIL=${counts.FAIL} SKIP=${counts.SKIP}`);
+
+  for (const s of steps) {
+    console.log(`[${s.status}] ${s.title}: ${s.summary}`);
+  }
+
   if (flags.writeReports) {
     const repoRoot = resolve(import.meta.dir, "..");
     const writeToVault = !flags.readonly; // only write into vault when explicitly in write mode
@@ -547,4 +560,3 @@ async function main() {
 }
 
 await main();
-

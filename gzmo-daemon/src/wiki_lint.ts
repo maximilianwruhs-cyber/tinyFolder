@@ -1,5 +1,5 @@
 import { join, relative, resolve, basename, extname } from "path";
-import { readdirSync, readFileSync } from "fs";
+import { promises as fsp } from "fs";
 import matter from "gray-matter";
 import { atomicWriteText } from "./vault_fs";
 import { appendWikiLogEntry } from "./wiki_log";
@@ -27,14 +27,14 @@ function isoDate(date = new Date()): string {
   return date.toISOString().slice(0, 10);
 }
 
-function walkMdFiles(root: string): string[] {
+async function walkMdFiles(root: string): Promise<string[]> {
   const out: string[] = [];
   const stack: string[] = [root];
   while (stack.length) {
     const dir = stack.pop()!;
     let entries;
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch {
       continue;
     }
@@ -86,7 +86,7 @@ function parseDateMaybe(v: unknown): number | null {
 export async function runWikiLint(vaultPath: string, opts?: { staleDays?: number }): Promise<WikiLintReport> {
   const staleDays = opts?.staleDays ?? 30;
   const wikiRoot = join(vaultPath, "wiki");
-  const files = walkMdFiles(wikiRoot);
+  const files = await walkMdFiles(wikiRoot);
 
   const findings: WikiLintFinding[] = [];
   const autoFixEnabled = process.env.WIKI_LINT_AUTOFIX === "1";
@@ -108,7 +108,7 @@ export async function runWikiLint(vaultPath: string, opts?: { staleDays?: number
     const base = basename(abs, extname(abs));
     let content = "";
     try {
-      content = readFileSync(abs, "utf-8");
+      content = await Bun.file(abs).text();
     } catch {
       continue;
     }

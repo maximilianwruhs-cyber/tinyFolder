@@ -18,10 +18,9 @@ import type { ChaosSnapshot } from "./types";
 import { Phase } from "./types";
 import type { PulseLoop } from "./pulse";
 import type { EmbeddingStore } from "./embeddings";
-import { augmentWithWikiGraphContext, formatSearchContext, inferSearchFilters, searchVault } from "./search";
+import { searchVault, formatSearchContext } from "./search";
 import { TaskMemory } from "./memory";
 import { safeWriteText } from "./vault_fs";
-import { SMALL_MODEL_AUDITOR_RULES } from "./small_model_rules";
 
 // ── Configuration ──────────────────────────────────────────
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
@@ -84,8 +83,6 @@ function buildSystemPrompt(
     "- Follow the task's requested structure exactly (headings, bullet counts, 'exactly N', etc.).",
     "- Do not invent information. If something is not present in the task (or provided context), say so explicitly and keep it brief.",
     "- If asked to quote text, quote it verbatim from the task/context.",
-    "",
-    SMALL_MODEL_AUDITOR_RULES,
   ].join("\n");
 
   if (snap) {
@@ -166,15 +163,10 @@ export async function processTask(
 
     // 2. Build context based on action
     let vaultContext: string | undefined;
-    
+
     if (action === "search" && embeddingStore) {
       // Vault search: find relevant chunks before answering
-      const vectorResults = await searchVault(body, embeddingStore, OLLAMA_API_URL, {
-        topK: 3,
-        filters: inferSearchFilters(body),
-      });
-      const vaultRoot = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? resolve(filePath, "../../..");
-      const results = await augmentWithWikiGraphContext(vaultRoot, vectorResults, 2);
+      const results = await searchVault(body, embeddingStore, OLLAMA_API_URL, 3);
       if (results.length > 0) {
         vaultContext = formatSearchContext(results);
         console.log(`[ENGINE] Found ${results.length} vault chunks (top: ${(results[0]!.score * 100).toFixed(0)}%)`);
@@ -187,7 +179,7 @@ export async function processTask(
     const temp = snap?.llmTemperature ?? 0.7;
     const maxTok = snap?.llmMaxTokens ?? 400;
     const valence = snap?.llmValence ?? 0;
-    console.log(`[ENGINE] Model: ${OLLAMA_MODEL} (temp: ${temp.toFixed(2)}, tokens: ${maxTok}, val: ${valence >= 0 ? "+" : ""}${valence.toFixed(2)}, phase: ${snap?.phase ?? "?"})`);    
+    console.log(`[ENGINE] Model: ${OLLAMA_MODEL} (temp: ${temp.toFixed(2)}, tokens: ${maxTok}, val: ${valence >= 0 ? "+" : ""}${valence.toFixed(2)}, phase: ${snap?.phase ?? "?"})`);
 
     // 4. Build system prompt with context (now chaos-modulated)
     const memoryContext = memory?.toPromptContext();
@@ -247,12 +239,16 @@ export async function processTask(
 
     // 12. Handle chain action — create next task
     if (action === "chain" && frontmatter?.chain_next) {
-      const nextTask = String(frontmatter.chain_next);
+      const { basename, dirname, join } = await import("path");
+
+      // Sanitize nextTask to prevent path traversal (only allow basename).
+      let nextTask = basename(String(frontmatter.chain_next));
+      if (!nextTask.endsWith(".md")) nextTask += ".md";
+
       console.log(`[ENGINE] Chain → next task: ${nextTask}`);
-      const { dirname, join } = await import("path");
       const chainPath = join(dirname(filePath), nextTask);
       const chainContent = `---\nstatus: pending\naction: think\nchain_from: ${fileName}\n---\n\n## Chained Task\n\nPrevious context:\n${fullText.slice(0, 300)}\n\nContinue from here.`;
-      
+
       try {
         // Derive vault root from the task path (Inbox lives under vault/GZMO).
         const vaultRoot = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? "";
