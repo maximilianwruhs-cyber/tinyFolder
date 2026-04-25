@@ -27,6 +27,7 @@ import { appendWikiLogEntry } from "./wiki_log";
 import { rebuildWikiIndex } from "./wiki_index";
 import { createAutoInboxTasks, parseTypedNextAction, type AutoTaskSpec } from "./auto_tasks";
 import { assessWikiDraft, quarantineArtifact, createRepairTask } from "./quarantine";
+import { writeOpsOutputsIndex } from "./wiki_ops_index";
 
 // ── Types ──────────────────────────────────────────────────
 interface ConsolidationResult {
@@ -135,6 +136,8 @@ export class WikiEngine {
 
     // Keep the index mechanically correct (prevents index rot).
     await rebuildWikiIndex(this.vaultPath).catch(() => {});
+    // Keep an ops outputs index page up to date (improves deterministic grounding).
+    await writeOpsOutputsIndex({ vaultPath: this.vaultPath }).catch(() => {});
 
     return results;
   }
