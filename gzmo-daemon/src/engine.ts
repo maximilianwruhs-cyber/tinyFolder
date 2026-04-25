@@ -18,9 +18,10 @@ import type { ChaosSnapshot } from "./types";
 import { Phase } from "./types";
 import type { PulseLoop } from "./pulse";
 import type { EmbeddingStore } from "./embeddings";
-import { searchVault, formatSearchContext } from "./search";
+import { augmentWithWikiGraphContext, formatSearchContext, inferSearchFilters, searchVault } from "./search";
 import { TaskMemory } from "./memory";
 import { safeWriteText } from "./vault_fs";
+import { SMALL_MODEL_AUDITOR_RULES } from "./small_model_rules";
 
 // ── Configuration ──────────────────────────────────────────
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
@@ -83,6 +84,8 @@ function buildSystemPrompt(
     "- Follow the task's requested structure exactly (headings, bullet counts, 'exactly N', etc.).",
     "- Do not invent information. If something is not present in the task (or provided context), say so explicitly and keep it brief.",
     "- If asked to quote text, quote it verbatim from the task/context.",
+    "",
+    SMALL_MODEL_AUDITOR_RULES,
   ].join("\n");
 
   if (snap) {
@@ -166,7 +169,12 @@ export async function processTask(
     
     if (action === "search" && embeddingStore) {
       // Vault search: find relevant chunks before answering
-      const results = await searchVault(body, embeddingStore, OLLAMA_API_URL, 3);
+      const vectorResults = await searchVault(body, embeddingStore, OLLAMA_API_URL, {
+        topK: 3,
+        filters: inferSearchFilters(body),
+      });
+      const vaultRoot = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? resolve(filePath, "../../..");
+      const results = await augmentWithWikiGraphContext(vaultRoot, vectorResults, 2);
       if (results.length > 0) {
         vaultContext = formatSearchContext(results);
         console.log(`[ENGINE] Found ${results.length} vault chunks (top: ${(results[0]!.score * 100).toFixed(0)}%)`);

@@ -1,13 +1,9 @@
 ---
-title: >-
-  Research: `chaos_dream`'s initial "no new sessions" report can be misleading;
-  explicit prompts are necessary to ensure all undigested logs, including older
-  ones, are processed.
+title: "Research: `chaos_dream`'s initial \"no new sessions\" report can be misleading; explicit prompts are necessary to ensure all undigested logs, including older ones, are processed."
 type: topic
-tags:
-  - research
-  - web
-  - autonomous
+role: generated
+retrieval_priority: low
+tags: [research, generated, session]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

@@ -1,13 +1,9 @@
 ---
-title: >-
-  Research: Architecture Pattern:** The Thought Cabinet employs a stochastic
-  absorption mechanism; submitted thoughts are not immediately guaranteed to be
-  reflected in the `chaos_status` counts.
+title: "Research: Architecture Pattern:** The Thought Cabinet employs a stochastic absorption mechanism; submitted thoughts are not immediately guaranteed to be reflected in the `chaos_status` counts."
 type: topic
-tags:
-  - research
-  - web
-  - autonomous
+role: generated
+retrieval_priority: low
+tags: [research, generated]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

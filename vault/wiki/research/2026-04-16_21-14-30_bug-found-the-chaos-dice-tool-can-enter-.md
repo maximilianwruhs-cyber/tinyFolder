@@ -1,13 +1,9 @@
 ---
-title: >-
-  Research: Bug Found:** The `chaos_dice` tool can enter a "stuck" state,
-  repeatedly returning a D20 result (and even the same value) despite explicit
-  requests for a different dice type (e.g., D6).
+title: "Research: Bug Found:** The `chaos_dice` tool can enter a \"stuck\" state, repeatedly returning a D20 result (and even the same value) despite explicit requests for a different dice type (e.g., D6)."
 type: topic
-tags:
-  - research
-  - web
-  - autonomous
+role: generated
+retrieval_priority: low
+tags: [research, generated, implementation-plan]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

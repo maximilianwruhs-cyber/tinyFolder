@@ -14,7 +14,7 @@
  */
 
 import { resolve, join, relative, basename } from "path";
-import { existsSync, mkdirSync, readdirSync } from "fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "fs";
 import { VaultWatcher } from "./src/watcher";
 import { processTask, infer } from "./src/engine";
 import { LiveStream } from "./src/stream";
@@ -56,6 +56,73 @@ for (const dir of [
 ]) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
+
+// ── Single-instance guard ───────────────────────────────────
+const LOCK_PATH = join(VAULT_PATH, "GZMO", ".gzmo-daemon.lock");
+let lockFd: number | null = null;
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    return err?.code === "EPERM";
+  }
+}
+
+function readLockPid(): number | null {
+  try {
+    const raw = readFileSync(LOCK_PATH, "utf-8");
+    const parsed = JSON.parse(raw);
+    const pid = Number(parsed?.pid);
+    return Number.isInteger(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function acquireSingleInstanceLock(): void {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      lockFd = openSync(LOCK_PATH, "wx");
+      writeFileSync(lockFd, JSON.stringify({
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        vaultPath: VAULT_PATH,
+      }, null, 2));
+      return;
+    } catch (err: any) {
+      if (err?.code !== "EEXIST") throw err;
+
+      const existingPid = readLockPid();
+      if (existingPid && isPidAlive(existingPid)) {
+        console.error(`[DAEMON] Another gzmo-daemon instance is already running (pid=${existingPid}).`);
+        console.error(`[DAEMON] Refusing to start a second watcher for vault: ${VAULT_PATH}`);
+        process.exit(1);
+      }
+
+      console.warn(`[DAEMON] Removing stale daemon lock: ${LOCK_PATH}`);
+      try { unlinkSync(LOCK_PATH); } catch {}
+    }
+  }
+
+  throw new Error(`Unable to acquire daemon lock: ${LOCK_PATH}`);
+}
+
+function releaseSingleInstanceLock(): void {
+  if (lockFd !== null) {
+    try { closeSync(lockFd); } catch {}
+    lockFd = null;
+  }
+
+  if (readLockPid() === process.pid) {
+    try { unlinkSync(LOCK_PATH); } catch {}
+  }
+}
+
+acquireSingleInstanceLock();
+process.on("exit", releaseSingleInstanceLock);
 
 // ── Boot ───────────────────────────────────────────────────
 console.log("═══════════════════════════════════════════════");
@@ -541,6 +608,9 @@ setInterval(async () => {
       tick: snap.tick,
       thoughtsIncubating: snap.thoughtsIncubating,
       thoughtsCrystallized: snap.thoughtsCrystallized,
+      llmTemperature: snap.llmTemperature,
+      llmMaxTokens: snap.llmMaxTokens,
+      llmValence: snap.llmValence,
     },
     scheduler: {
       dreamsEnabled: runtime.enableDreams,
@@ -573,6 +643,7 @@ async function shutdown(signal: string) {
   stream.destroy(); // Flush buffered log entries
   pulse.stop();
   await watcher.stop();
+  releaseSingleInstanceLock();
   process.exit(0);
 }
 

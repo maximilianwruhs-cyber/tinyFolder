@@ -1,15 +1,11 @@
 ---
-title: Edge Node
+title: "Edge Node"
 type: entity
-tags:
-  - infrastructure
-  - sovereign-ai
-  - docker
-  - llama-cpp
-  - gpu
+role: canonical
+tags: [entity, canonical, gzmo, openclaw, edge-node, devstack]
 sources: 3
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-24'
+updated: 2026-04-25
 ---
 # Edge Node
 
@@ -50,12 +46,25 @@ ansible-playbook -i ansible/inventory.yml ansible/deploy_node.yml --ask-become-p
 cp .env.example .env && ./deploy.sh
 ```
 
+## Current Canonical State
+
+- Current local workspace path: `/home/maximilian-wruhs/tinyFolder`.
+- Current vault path: `/home/maximilian-wruhs/tinyFolder/vault`.
+- Current daemon path: `/home/maximilian-wruhs/tinyFolder/gzmo-daemon`.
+- Historical `DevStack_v2` paths may appear in old session/source pages; prefer [[GZMO-Hardware-Profile]] for active host paths.
+
 ## Related
 
 - [[GZMO]] — Primary agent running on this stack
 - [[OpenClaw]] — Agent orchestration framework
 - [[Sovereign-AI]] — Philosophical foundation
 - [[DevStack]] — Parent project and development environment
+
+## Takeout Source Index
+
+- `Building a Private Local AI Development Environmen` and `The Sovereign Software Factory Blueprint` clusters map to this page.
+- Stable infrastructure facts should stay here or in [[DevStack]]; old blueprint claims remain evidence until verified against the active workspace.
+- Corpus map: [[NotebookLM-Corpus-Map]].
 
 ## Sources
 
@@ -82,3 +91,11 @@ cp .env.example .env && ./deploy.sh
 - [[source-48a649b9-7302-41c2-89a2-c94a0be41f58-artifacts-mcp-integration-blueprint]]
 
 - [[source-51b6a24b-18d2-47e7-8680-05ebcd13d818-gzmo-lmstudio-blueprint]]
+
+- [[source-51b6a24b-18d2-47e7-8680-05ebcd13d818-orchestrator-architecture-analysis]]
+
+- [[source-730e2574-4e11-4f5a-b39b-80f57a616fe9-walkthrough]]
+
+- [[source-736d9f58-2548-4221-b7f1-565d2ed799ef-devstack-v3-filesystem-audit]]
+
+- [[source-736d9f58-2548-4221-b7f1-565d2ed799ef-walkthrough]]

@@ -1,15 +1,11 @@
 ---
-title: Music Production
+title: "Music Production"
 type: topic
-tags:
-  - music
-  - dnb
-  - drum-and-bass
-  - synthesis
-  - audio
+role: canonical
+tags: [topic, canonical, notebooklm]
 sources: 3
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-22'
+updated: 2026-04-25
 ---
 # Music Production
 
@@ -26,6 +22,12 @@ Drum and Bass (DnB) production — precise rhythm programming, powerful low-end 
 ## Related
 
 - [[Linux-Workstation]] — Production environment
+
+## Takeout Source Index
+
+- Main NotebookLM clusters: `Harmonizing the Machine` and related DnB/music-production notes.
+- Keep production techniques here; host/workstation setup belongs in [[Linux-Workstation]].
+- Corpus map: [[NotebookLM-Corpus-Map]].
 
 ## Sources
 

@@ -1,14 +1,11 @@
 ---
-title: OpenClaw
+title: "OpenClaw"
 type: entity
-tags:
-  - framework
-  - agent
-  - autonomous
-  - node-js
+role: canonical
+tags: [entity, canonical, openclaw, local-ai, implementation-plan, research]
 sources: 4
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-24'
+updated: 2026-04-25
 ---
 # OpenClaw
 
@@ -55,11 +52,22 @@ From the research sources, OpenClaw implements a three-circuit model:
 2. **Deliberative Circuit** — Planning, architecture, multi-step reasoning
 3. **Background Circuit** — Heartbeat-driven maintenance and monitoring
 
+## Takeout Distillation
+
+- The Google Takeout corpus contains large OpenClaw clusters: `OpenClaw Deep Research`, `OpenClaw`, `The OpenClaw Architecture and Tri-Circuit Autonomo`, and `OpenClaw_ Autonomous AI Agents in Financial Operat`.
+- Distilled canonical takeaway: OpenClaw is the agent framework pattern behind GZMO: heartbeat-driven operation, file-first memory, tool/MCP integration, and tri-circuit autonomy.
+- Use this page for durable OpenClaw facts; use source summaries and Takeout raw records only when exact provenance is required.
+
 ## Related
 
 - [[GZMO]] — Primary agent instance
 - [[Edge-Node]] — Deployment platform
 - [[Agentic-Architecture]] — Design patterns
+
+## Source Index
+
+- Main Takeout clusters: `OpenClaw Deep Research` (110 files), `OpenClaw`, `The OpenClaw Architecture and Tri-Circuit Autonomy`, and OpenClaw finance/agentic-operation notebooks.
+- Use this page for durable architecture; use [[NotebookLM-Corpus-Map]] to route into raw provenance.
 
 ## Sources
 
@@ -79,3 +87,5 @@ From the research sources, OpenClaw implements a three-circuit model:
 - [[source-48a649b9-7302-41c2-89a2-c94a0be41f58-artifacts-mcp-integration-blueprint]]
 
 - [[source-51b6a24b-18d2-47e7-8680-05ebcd13d818-blueprint-05-memory-system]]
+
+- [[source-68a9868c-ad57-482a-85b0-6c4090e662a6-artifacts-openclaw-research]]

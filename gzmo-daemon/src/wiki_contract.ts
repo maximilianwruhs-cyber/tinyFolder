@@ -3,7 +3,7 @@ import { basename, dirname, extname, relative, resolve } from "path";
 import { existsSync } from "fs";
 import { safeWriteText } from "./vault_fs";
 
-export type WikiType = "entity" | "concept" | "topic" | "source-summary" | "dream" | "index" | "log" | "overview";
+export type WikiType = "entity" | "concept" | "topic" | "research" | "session" | "source-summary" | "dream" | "index" | "log" | "map" | "skill" | "overview";
 
 export interface WikiFrontmatter {
   title: string;
@@ -63,6 +63,9 @@ function typeFromWikiPath(wikiFileAbs: string, vaultPath: string): WikiType {
     case "entities": return "entity";
     case "concepts": return "concept";
     case "topics": return "topic";
+    case "research": return "research";
+    case "sessions": return "session";
+    case "skills": return "skill";
     case "sources": return "source-summary";
     case "dreams": return "dream";
     default:

@@ -9,14 +9,20 @@ Read this file **before** any wiki operation.
 Obsidian_Vault/
 ├── raw/                    ← IMMUTABLE source documents. Never modify.
 │   ├── agent-logs/         ←   Antigravity session artifacts
+│   ├── gemini/             ←   Gemini/Google AI Takeout transcripts
+│   ├── google-takeout/     ←   Full Google Takeout imports + manifests
 │   └── notebooklm/         ←   NotebookLM exported sources & notes
 ├── wiki/                   ← YOUR wiki. You own this layer entirely.
+│   ├── START.md            ←   Small-model entrypoint and navigation map
 │   ├── index.md            ←   Catalog of every wiki page
 │   ├── log.md              ←   Chronological operations log
 │   ├── overview.md          ←   High-level synthesis across all topics
 │   ├── entities/           ←   Pages for projects, tools, people
 │   ├── concepts/           ←   Pages for patterns, paradigms, ideas
 │   ├── topics/             ←   Thematic deep-dives & summaries
+│   ├── research/           ←   Dated research notes and investigations
+│   ├── sessions/           ←   Session distillations and completed-task rollups
+│   ├── skills/             ←   Reusable operator/model procedures
 │   ├── sources/            ←   One-page summaries per raw source
 │   └── dreams/             ←   Identity evolution proposals (→ core_identity)
 │       └── index.md        ←   Open/merged/rejected proposals
@@ -34,7 +40,8 @@ Obsidian_Vault/
 ```yaml
 ---
 title: Page Title
-type: entity | concept | topic | source-summary | dream
+type: entity | concept | topic | research | session | source-summary | dream | index | log | map | skill
+role: canonical | generated | raw-summary | operational
 tags: [sovereign-ai, edge-node, trading]
 sources: 3
 created: 2026-04-13
@@ -44,6 +51,17 @@ updated: 2026-04-13
 
 5. **Keep pages focused.** One concept/entity/topic per page. Split when pages exceed ~500 lines.
 6. **Obsidian conventions:** Use `[[wikilinks]]`, `#tags`, and standard Markdown. No HTML.
+7. **Small-model navigation:** keep `wiki/START.md`, `wiki/overview.md`, and `wiki/index.md` accurate enough that a small LLM can choose folders before reading details.
+
+## Retrieval + Embeddings
+
+GZMO embeds curated working layers, not raw archives:
+
+- Embedded: `wiki/`, `GZMO/Thought_Cabinet/`, `GZMO/Inbox/`, `Projects/`, `Notes/`
+- Not embedded directly: `raw/` and `GZMO/Archive/`
+- Raw imports become searchable after source summaries or related pages are written under `wiki/`
+
+For small LLMs, pages should expose intent in frontmatter (`type`, `tags`, `sources`, `updated`) and start with a short H1 + summary before long evidence sections.
 
 ## Operations
 
@@ -69,6 +87,14 @@ When a new file appears in `raw/`:
 
 **During heartbeats:** Process ONE source per heartbeat to limit token burn.
 **During interactive sessions:** Process as many as the User wants.
+
+### Bulk Takeout Import
+
+Bulk archives use a two-layer pattern:
+
+1. Preserve every file under `raw/google-takeout/<import-id>/` with `manifest.json`, `summary.json`, Markdown records, and binary sidecars.
+2. Create one corpus-level source summary under `wiki/sources/` immediately.
+3. Promote only knowledge-bearing records into additional source summaries or entity/topic pages as needed; private chat records remain raw unless explicitly useful.
 
 ### Query
 
@@ -184,6 +210,9 @@ Where does this concept have limits or contradictions?
 ```markdown
 # Wiki Index
 
+## Start Here
+- [[START]] — Small-model navigation map
+
 ## Entities
 - [[GZMO]] — Autonomous AI agent (5 sources)
 - [[Edge-Node]] — Sovereign bare-metal AI stack (3 sources)
@@ -193,6 +222,12 @@ Where does this concept have limits or contradictions?
 
 ## Topics
 - [[Trading-Automation]] — IBKR/Bitpanda automated trading (4 sources)
+
+## Research
+- [[2026-04-18_local-rag-liteparse-vault-search]] — focused investigation
+
+## Sessions
+- [[2026-04-18_session-distill_architecture]] — session distillation
 
 ## Source Summaries
 - [[source-gzmo-base]] — GZMO OpenClaw persona definition

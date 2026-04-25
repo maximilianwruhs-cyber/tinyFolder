@@ -1,12 +1,9 @@
 ---
-title: >-
-  Research: Bug:** The `chaos_dream` tool initially fails to detect all
-  available undigested session logs, requiring explicit re-runs to process them.
+title: "Research: Bug:** The `chaos_dream` tool initially fails to detect all available undigested session logs, requiring explicit re-runs to process them."
 type: topic
-tags:
-  - research
-  - web
-  - autonomous
+role: generated
+retrieval_priority: low
+tags: [research, generated, implementation-plan, session]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

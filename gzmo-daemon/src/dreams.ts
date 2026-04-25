@@ -17,6 +17,9 @@ import type { EmbeddingStore } from "./embeddings";
 import { searchVault, formatSearchContext, type SearchResult } from "./search";
 import { atomicWriteJson, safeWriteText } from "./vault_fs";
 import { createAutoInboxTasks, parseTypedNextAction, type AutoTaskSpec } from "./auto_tasks";
+import { parseStructuredDreamReflection } from "./structured";
+import { loadAnchorSources, summarizeAnchorFailures, verifyAnchors, type AnchorVerificationResult } from "./anchor_verifier";
+import { REFLECTION_FAILURE_PREMISE, SMALL_MODEL_AUDITOR_RULES } from "./small_model_rules";
 
 const MIN_BODY_LENGTH = 100;
 const MIN_RESPONSE_LENGTH = 120;
@@ -49,6 +52,8 @@ interface DreamDraft {
   nextActions: string[];
   confidence: number;
   unverifiedClaims: string[];
+  anchors: string[];
+  anchorVerification?: AnchorVerificationResult[];
   raw: string;
 }
 
@@ -129,6 +134,18 @@ export class DreamEngine {
     if (!draft) {
       console.warn(`[DREAM] Draft parse failed for ${task.id}`);
       return null;
+    }
+
+    const anchorSources = await loadAnchorSources({
+      vaultPath: this.vaultPath,
+      taskRequest: transcript.taskPrompt,
+      modelResponse: transcript.response,
+      files: relatedFiles.map((result) => result.file),
+    });
+    draft.anchorVerification = verifyAnchors(draft.anchors, anchorSources);
+    const anchorFailures = summarizeAnchorFailures(draft.anchorVerification);
+    if (anchorFailures.length > 0) {
+      draft.unverifiedClaims.push(...anchorFailures);
     }
 
     const quality = this.assessDreamDraft(draft, recentDreams);
@@ -269,31 +286,27 @@ export class DreamEngine {
       "If a claim appears only in the MODEL RESPONSE and is not corroborated by the task request or canonical context, move it to Unverified Claims.",
       "Recent dreams are for novelty comparison only and must NOT be used as factual evidence.",
       "",
-      "Return EXACTLY this structure:",
+      SMALL_MODEL_AUDITOR_RULES,
+      REFLECTION_FAILURE_PREMISE,
       "",
-      "Summary:",
-      "<2-4 factual sentences>",
-      "",
-      "Evidence:",
-      "- <Task request or canonical file backed point>",
-      "- <Task request or canonical file backed point>",
-      "",
-      "Delta:",
-      "<What is genuinely new compared with canonical context or recent dreams, or 'No meaningful delta.'>",
-      "",
-      "Next Actions:",
-      "- <1-3 concrete, testable follow-ups>",
-      "",
-      "Confidence: <0.00-1.00>",
-      "",
-      "Unverified Claims:",
-      "- <claim from the model response that was not corroborated>",
-      "- None",
+      "Return ONLY valid JSON with this exact object shape:",
+      "{",
+      "  \"summary\": \"2-4 factual sentences\",",
+      "  \"evidence\": [\"Task request or canonical file backed point\"],",
+      "  \"delta\": \"What is genuinely new, or No meaningful delta.\",",
+      "  \"missing\": [\"facts or anchors that were needed but not present\"],",
+      "  \"superfluous\": [\"unsupported details from the model response\"],",
+      "  \"claims\": [\"atomic claim that is supported by the task or canonical context\"],",
+      "  \"anchors\": [\"exact source string or file name that supports a claim\"],",
+      "  \"nextActions\": [{\"type\":\"verify\",\"title\":\"concrete testable follow-up\"}],",
+      "  \"confidence\": 0.0,",
+      "  \"unverifiedClaims\": [\"claim from the model response that was not corroborated\"]",
+      "}",
       "",
       "Rules:",
-      "- Evidence bullets must cite `Task request`, `Model response`, or a canonical file name.",
-      "- Next Actions must be operational, not philosophical.",
-      "- If (and only if) a Next Action should become an Inbox task, prefix it with one of: [maintenance] [research] [build] [verify] [curate].",
+      "- Do not wrap JSON in Markdown fences.",
+      "- Evidence entries must cite `Task request`, `Model response`, or a canonical file name.",
+      "- Next Actions must be operational, not philosophical; valid types are maintenance, research, build, verify, curate.",
       "- If the task is trivial or generic, say so directly and keep Next Actions conservative.",
       "- Keep Summary and Delta together under 220 words.",
     ].join("\n");
@@ -418,6 +431,17 @@ export class DreamEngine {
       );
     }
 
+    if (draft.anchorVerification && draft.anchorVerification.length > 0) {
+      content.push(
+        "## Anchor Verification",
+        "",
+        ...draft.anchorVerification.map((result) =>
+          `- ${result.verified ? "verified" : "missing"}: ${result.anchor}${result.source ? ` (${result.source})` : ""}`
+        ),
+        "",
+      );
+    }
+
     content.push(
       "## Chaos State at Dream Time",
       "",
@@ -456,11 +480,26 @@ export class DreamEngine {
   private isCanonicalContextFile(file: string): boolean {
     const normalized = file.replace(/\\/g, "/");
     return normalized.startsWith("wiki/")
+      || normalized.startsWith("GZMO/Thought_Cabinet/")
       || normalized.startsWith("Projects/")
       || normalized.startsWith("Notes/");
   }
 
   private parseDreamDraft(raw: string): DreamDraft | null {
+    const structured = parseStructuredDreamReflection(raw);
+    if (structured) {
+      return {
+        summary: structured.summary,
+        evidence: structured.evidence,
+        delta: structured.delta,
+        nextActions: structured.nextActions.map((action) => `[${action.type}] ${action.title}`),
+        confidence: structured.confidence,
+        unverifiedClaims: [...structured.unverifiedClaims, ...structured.superfluous],
+        anchors: structured.anchors,
+        raw,
+      };
+    }
+
     // Accept both legacy label format ("Summary:") and markdown heading format ("## Summary").
     const summary = this.extractSection(raw, "Summary", "Evidence") || this.extractMarkdownSection(raw, "Summary", "Evidence");
     const evidenceSection = this.extractSection(raw, "Evidence", "Delta") || this.extractMarkdownSection(raw, "Evidence", "Delta");
@@ -482,6 +521,7 @@ export class DreamEngine {
       nextActions: nextActions.filter((item) => !/^none$/i.test(item)),
       confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.5,
       unverifiedClaims: unverifiedClaims.filter((item) => !/^none$/i.test(item)),
+      anchors: [],
       raw,
     };
   }
@@ -559,6 +599,12 @@ export class DreamEngine {
 
     if (draft.summary.length >= MIN_SUMMARY_LENGTH) score += 20;
     else reasons.push("summary too short or generic");
+
+    const anchorChecks = draft.anchorVerification ?? [];
+    if (draft.anchors.length > 0 && anchorChecks.some((result) => result.verified)) score += 10;
+    if (draft.anchors.length > 0 && anchorChecks.every((result) => !result.verified)) {
+      reasons.push("no exact anchors verified");
+    }
 
     const currentText = this.normalizeText([
       draft.summary,

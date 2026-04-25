@@ -1,20 +1,26 @@
 ---
-title: GZMO Hardware Profile
+title: "GZMO Hardware Profile"
 type: entity
-tags:
-  - hardware
-  - gpu
-  - system
-  - seed-document
+role: canonical
+tags: [entity, canonical, gzmo, edge-node, devstack, local-ai]
 sources: 0
 created: '2026-04-22'
-updated: '2026-04-22'
+updated: 2026-04-25
 ---
 # GZMO Hardware Profile
 
+## Current Hardware And Paths
+
+Use this section for queries like `GZMO hardware path`, `current vault path`, `daemon path`, `workspace path`, `GPU`, `VRAM`, or `Ollama host`.
+
+- **Current Workspace Path**: `/home/maximilian-wruhs/tinyFolder`
+- **Current Vault Path**: `/home/maximilian-wruhs/tinyFolder/vault`
+- **Current Daemon Path**: `/home/maximilian-wruhs/tinyFolder/gzmo-daemon`
+- **Historical Path Warning**: `/home/maximilian-wruhs/Dokumente/Playground/DevStack_v2/` is historical unless a task explicitly asks about that checkout.
+
 ## Host Machine
 - **Hostname**: GZMO
-- **OS**: Ubuntu 24.04 LTS (Kernel 6.17.0-20-generic PREEMPT_DYNAMIC)
+- **OS**: Ubuntu Linux (Kernel 6.17.0-22-generic)
 - **Architecture**: x86_64
 
 ## CPU
@@ -34,8 +40,10 @@ updated: '2026-04-22'
 
 ## Storage
 - **Primary**: NVMe SSD
-- **Vault Path**: `/home/maximilian-wruhs/Dokumente/Playground/DevStack_v2/Obsidian_Vault`
-- **Daemon Path**: `/home/maximilian-wruhs/Dokumente/Playground/DevStack_v2/edge-node/gzmo-daemon`
+- **Current Workspace**: `/home/maximilian-wruhs/tinyFolder`
+- **Vault Path**: `/home/maximilian-wruhs/tinyFolder/vault`
+- **Daemon Path**: `/home/maximilian-wruhs/tinyFolder/gzmo-daemon`
+- **Historical DevStack v2 Path**: `/home/maximilian-wruhs/Dokumente/Playground/DevStack_v2/` — treat as historical unless a task explicitly references that checkout.
 
 ## Inference Stack
 - **Runtime**: Bun (JavaScriptCore, smol heap mode)

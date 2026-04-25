@@ -1,6 +1,7 @@
 ---
-title: GZMO System Contracts
+title: "GZMO System Contracts"
 type: entity
+role: canonical
 tags: [architecture, contracts, daemon, operations]
 sources: 0
 created: "2026-04-24"
@@ -118,4 +119,16 @@ This page defines **operational contracts** for each subsystem: inputs, outputs,
 
 - Inbox embeddings can drift unless post-task upserts always run.
 - Wiki consolidation prompts must stay strict, otherwise it hallucinates and pollutes RAG.
+## Small-LLM Retrieval Contract
+
+- RAG should prefer canonical pages (`role: canonical`) and compact maps before generated histories.
+- `role: generated` means useful evidence, not durable truth.
+- `role: raw-summary` means provenance summary; promote stable conclusions into entity/topic pages.
+- `retrieval_priority: low` marks long operational/session pages that should not be first-choice context.
+- For the full query contract, read [[Local-RAG-Contract]].
+## Source Index
+
+- Stable daemon behavior is canonical here when it has code support in `gzmo-daemon/src/` or repeated operational evidence.
+- Generated notes and Takeout notebooks are inputs, not contracts, until promoted here.
+- Related curation maps: [[Vault-Operations-Log-Map]], [[GZMO-Maintenance-Digests]], [[Local-RAG-Contract]].
 

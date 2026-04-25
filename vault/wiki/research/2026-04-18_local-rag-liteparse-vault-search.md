@@ -1,13 +1,9 @@
 ---
-title: Local RAG — LiteParse + Obsidian Vault Search Architecture
+title: "Local RAG — LiteParse + Obsidian Vault Search Architecture"
 type: topic
-tags:
-  - research
-  - RAG
-  - liteparse
-  - embeddings
-  - vault-search
-  - nomic-embed-text
+role: generated
+retrieval_priority: low
+tags: [research, generated, local-ai, operations]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

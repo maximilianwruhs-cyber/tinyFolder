@@ -1,7 +1,9 @@
 ---
-title: Autonomous Dream Cycle Trigger
+title: "Autonomous Dream Cycle Trigger"
 type: dream
-tags: []
+role: generated
+retrieval_priority: low
+tags: [dream, generated, operations]
 sources: 0
 created: 'Tue Apr 14 2026 02:00:00 GMT+0200 (Central European Summer Time)'
 updated: '2026-04-22'

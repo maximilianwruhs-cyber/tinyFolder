@@ -1,13 +1,9 @@
 ---
-title: Speculative Decoding — Qwen 0.5B/3B Draft-Target Architecture
+title: "Speculative Decoding — Qwen 0.5B/3B Draft-Target Architecture"
 type: topic
-tags:
-  - research
-  - speculative-decoding
-  - llama-cpp
-  - qwen
-  - inference
-  - GTX-1070
+role: generated
+retrieval_priority: low
+tags: [research, generated]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

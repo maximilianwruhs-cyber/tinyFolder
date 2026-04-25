@@ -1,15 +1,11 @@
 ---
-title: Game Engine
+title: "Game Engine"
 type: topic
-tags:
-  - rust
-  - game-engine
-  - polyhedral
-  - dynamics
-  - programming
+role: canonical
+tags: [topic, canonical, notebooklm, implementation-plan]
 sources: 2
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-24'
+updated: 2026-04-25
 ---
 # Game Engine
 
@@ -28,6 +24,12 @@ Rust-based game engine development with a focus on deterministic polyhedral dyna
 ## Related
 
 - [[Linux-Workstation]] — Development platform
+
+## Takeout Source Index
+
+- Main clusters include deterministic polyhedral dynamics, trading-card-game architecture, engagement, and immersion.
+- Keep implementation facts separate from design-analysis notes until a current project path exists.
+- Corpus map: [[NotebookLM-Corpus-Map]].
 
 ## Sources
 

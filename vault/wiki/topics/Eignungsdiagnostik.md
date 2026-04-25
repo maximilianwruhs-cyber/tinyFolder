@@ -1,15 +1,11 @@
 ---
-title: Eignungsdiagnostik
+title: "Eignungsdiagnostik"
 type: topic
-tags:
-  - psychology
-  - security
-  - assessment
-  - austria
-  - exekutive
+role: canonical
+tags: [topic, canonical, notebooklm]
 sources: 5
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-22'
+updated: 2026-04-25
 ---
 # Eignungsdiagnostik
 
@@ -37,6 +33,12 @@ Psychologische Selektion und Eignungsprüfung für Österreichs Sicherheitsbehö
 ## Related
 
 - Souveränität als Konzept verbindet sich mit [[Sovereign-AI]] — technologische vs. polizeiliche Souveränität
+
+## Takeout Source Index
+
+- Main NotebookLM cluster: `Österreichs Sicherheitsdiagnostik_ Psychologische` plus RGT and professional-mindset notebooks.
+- Keep legal/psychological conclusions source-bound; do not generalize beyond the imported materials without a new verified source.
+- Corpus map: [[NotebookLM-Corpus-Map]].
 
 ## Sources
 

@@ -1,11 +1,8 @@
 ---
-title: Vault Maintenance Procedure
+title: "Vault Maintenance Procedure"
 type: topic
-tags:
-  - skill
-  - maintenance
-  - vault
-  - procedure
+role: operational
+tags: [skill, operational, research, session]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

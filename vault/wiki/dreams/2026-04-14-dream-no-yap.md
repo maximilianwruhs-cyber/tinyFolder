@@ -1,10 +1,9 @@
 ---
 title: 'Dream: Der No-Yap Coder'
 type: dream
-tags:
-  - behavior
-  - coding
-  - efficiency
+role: generated
+retrieval_priority: low
+tags: [dream, generated, gzmo]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

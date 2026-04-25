@@ -1,11 +1,8 @@
 ---
-title: arXiv Deep Dive Procedure
+title: "arXiv Deep Dive Procedure"
 type: topic
-tags:
-  - skill
-  - research
-  - arxiv
-  - procedure
+role: operational
+tags: [skill, operational, research]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

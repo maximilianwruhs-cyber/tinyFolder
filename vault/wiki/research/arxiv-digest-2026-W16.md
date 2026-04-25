@@ -1,10 +1,9 @@
 ---
 title: 'arXiv Digest — Week 16, 2026'
 type: topic
-tags:
-  - research
-  - arxiv
-  - weekly
+role: generated
+retrieval_priority: low
+tags: [research, generated, gzmo, local-ai]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

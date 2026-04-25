@@ -1,7 +1,8 @@
 ---
-title: RAG Proof Token
+title: "RAG Proof Token"
 type: topic
-tags: []
+role: canonical
+tags: [topic, canonical]
 sources: 0
 created: '2026-04-23'
 updated: '2026-04-23'

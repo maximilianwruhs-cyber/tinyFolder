@@ -1,14 +1,11 @@
 ---
-title: DevStack
+title: "DevStack"
 type: entity
-tags:
-  - infrastructure
-  - development
-  - sovereign-ai
-  - architecture
+role: canonical
+tags: [entity, canonical, gzmo, openclaw, edge-node, devstack]
 sources: 3
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-24'
+updated: 2026-04-25
 ---
 # DevStack
 
@@ -36,12 +33,24 @@ DevStack_v2/
 └── ...
 ```
 
+## Current Canonical State
+
+- In this workspace, DevStack knowledge is represented by the repository at `/home/maximilian-wruhs/tinyFolder`.
+- `vault/` is the curated knowledge layer; `vault/raw/` is immutable source material; `gzmo-daemon/` is the active daemon implementation.
+- Historical `DevStack_v2` diagrams and session notes remain evidence, but canonical path references should point to the current workspace unless explicitly discussing the old checkout.
+
 ## Related
 
 - [[Edge-Node]] — Core AI infrastructure
 - [[GZMO]] — Primary agent
 - [[OpenClaw]] — Agent framework
 - [[Sovereign-AI]] — Design philosophy
+
+## Takeout Source Index
+
+- DevStack-related Takeout clusters include private local AI development, sovereign software factory, TUI framework, and Obolus extension research.
+- Current path facts are canonical here and in [[GZMO-Hardware-Profile]]; old diagrams are historical evidence.
+- Corpus map: [[NotebookLM-Corpus-Map]].
 
 ## Sources
 
@@ -55,3 +64,9 @@ DevStack_v2/
 - [[source-1ae46419-de0a-4da1-9193-3f29c246c12b-implementation-plan]]
 
 - [[source-51b6a24b-18d2-47e7-8680-05ebcd13d818-blueprint-02-chief-of-staff]]
+
+- [[source-6fabbb0f-70a2-47d1-b2ae-5a25f621b974-implementation-plan]]
+
+- [[source-92cc96d6-8d37-4825-a88a-1e4a542d1485-devstack-architecture-cycle]]
+
+- [[source-92cc96d6-8d37-4825-a88a-1e4a542d1485-walkthrough]]

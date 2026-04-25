@@ -1,10 +1,9 @@
 ---
 title: 'Research: lorenz attractor autonomous agents'
 type: topic
-tags:
-  - research
-  - web
-  - autonomous
+role: generated
+retrieval_priority: low
+tags: [research, generated]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

@@ -1,13 +1,9 @@
 ---
-title: >-
-  Research: Bug:** The `chaos_dice` tool (or its integration) can become stuck,
-  repeatedly reporting a previous D20 roll even when a D6 is explicitly
-  requested, indicating a
+title: "Research: Bug:** The `chaos_dice` tool (or its integration) can become stuck, repeatedly reporting a previous D20 roll even when a D6 is explicitly requested, indicating a"
 type: topic
-tags:
-  - research
-  - web
-  - autonomous
+role: generated
+retrieval_priority: low
+tags: [research, generated, implementation-plan]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

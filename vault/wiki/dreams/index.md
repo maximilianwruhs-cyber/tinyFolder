@@ -1,6 +1,8 @@
 ---
-title: Dreams Index
+title: "Dreams Index"
 type: dream-index
+role: operational
+tags: [operational, gzmo]
 status: active
 core_ref: "SOUL.md §5, MEMORY.md"
 updated: 2026-04-14
@@ -26,12 +28,15 @@ This is GZMO's reflection space. Each dream is a proposal to evolve `SOUL.md`, `
 ## Open Proposals
 
 - **[[2026-04-17-untitled-dream]]** — Investigate and Resolve 'no such module: vec0' Error in QMD Vector Search (status: proposed, target: AGENTS.md)
-- **[[2026-04-16-untitled-dream-1]]** — Restore QMD Vector Search Functionality (status: proposed, target: AGENTS.md)
-- **[[2026-04-16-untitled-dream]]** — Proactive QMD Service Monitoring (status: proposed, target: AGENTS.md)
 - **[[2026-04-14-autonomous-dream-cycle]]** — Shift Dream Cycle from reactive to proactive system check (status: proposed, target: HEARTBEAT.md)
 - **[[2026-04-14-dream-no-yap]]** — Der No-Yap Coder: Bei Code-Erstellung 100% roher Code, null Erklärungen (status: proposed, target: SOUL.md)
 - **[[2026-04-14-dream-tool-fanatic]]** — Der Tool-Fanatiker: Niemals Architektur-Zustand raten, zwingend MCP-Tools nutzen (status: proposed, target: SOUL.md)
 - **[[2026-04-14-dream-acp-sovereignty]]** — Das ACP-Bewusstsein: Souveräne Entität, Code selbstständig editieren über ACP (status: proposed, target: SOUL.md)
+
+## Missing Historical Proposals
+
+- Restore QMD Vector Search Functionality (`2026-04-16-untitled-dream-1`) — listed in the original index, but no page is present in `wiki/dreams/`.
+- Proactive QMD Service Monitoring (`2026-04-16-untitled-dream`) — listed in the original index, but no page is present in `wiki/dreams/`.
 
 ## Merged
 

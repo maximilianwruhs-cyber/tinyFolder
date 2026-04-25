@@ -1,7 +1,8 @@
 ---
-title: Architecture Overview
+title: "Architecture Overview"
 type: entity
-tags: []
+role: canonical
+tags: [entity, canonical, gzmo, local-ai, implementation-plan]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-24'

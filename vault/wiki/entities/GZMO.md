@@ -1,14 +1,11 @@
 ---
-title: GZMO
+title: "GZMO"
 type: entity
-tags:
-  - agent
-  - openclaw
-  - sovereign-ai
-  - daemon
+role: canonical
+tags: [entity, canonical, gzmo, openclaw, edge-node, local-ai]
 sources: 2
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-22'
+updated: 2026-04-25
 ---
 # GZMO
 
@@ -55,6 +52,13 @@ GZMO runs inside the [[Edge-Node]] stack as the `openclaw-gateway` container:
 - **2026-04-01:** GitHub Actions failure observed (Pages build, missing .gitmodules)
 - **2026-04-13:** Wiki maintenance + Dreams evolution mechanism added
 
+## Current Canonical State
+
+- GZMO runs from the current workspace `/home/maximilian-wruhs/tinyFolder/gzmo-daemon` and uses `vault/` as its local memory substrate.
+- The strongest retrieval entrypoints are [[START]], [[GZMO-System-Contracts]], [[GZMO-Operator-Playbook]], and this page.
+- Treat generated dreams, self-ask notes, and Thought Cabinet entries as evidence until durable facts are promoted into canonical pages.
+- For current model and embedding behavior, read [[GZMO-Model-Registry]] and [[Local-RAG-Contract]].
+
 ## Related
 
 - [[Edge-Node]] — Deployment platform
@@ -62,7 +66,15 @@ GZMO runs inside the [[Edge-Node]] stack as the `openclaw-gateway` container:
 - [[Sovereign-AI]] — Philosophical foundation
 - [[DevStack]] — Development environment
 
+## Takeout Source Index
+
+- `GZMO` and `GZMO_soul_merged_new` NotebookLM clusters reinforce GZMO as local daemon/persona plus memory/identity substrate.
+- Stable daemon invariants belong in [[GZMO-System-Contracts]]; personality/history belongs here only when durable.
+- Corpus map: [[NotebookLM-Corpus-Map]].
+
 ## Sources
 
 - `raw/notebooklm/GZMO__source__GZMO_Base.md` — OpenClaw persona definition
 - `raw/notebooklm/GZMO__source__gzmo_raw.md` — Raw development notes
+
+- [[source-6316916b-7c32-4967-b36e-7e26a9d08493-implementation-plan]]

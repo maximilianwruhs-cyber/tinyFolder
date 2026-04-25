@@ -1,13 +1,9 @@
 ---
-title: The Sedation Paradox — Allostasis and Cognitive Drive Architecture
+title: "The Sedation Paradox — Allostasis and Cognitive Drive Architecture"
 type: topic
-tags:
-  - research
-  - allostasis
-  - sedation
-  - CDA
-  - chaos-engine
-  - cortisol
+role: generated
+retrieval_priority: low
+tags: [research, generated]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'

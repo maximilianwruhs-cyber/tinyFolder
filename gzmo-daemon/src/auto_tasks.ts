@@ -2,6 +2,7 @@ import { join } from "path";
 import { existsSync, readFileSync } from "fs";
 import * as crypto from "crypto";
 import { safeWriteText, atomicWriteJson } from "./vault_fs";
+import { parseStructuredNextActions } from "./structured";
 
 export type InboxTaskType = "maintenance" | "research" | "build" | "verify" | "curate";
 
@@ -105,6 +106,9 @@ function templateFor(type: InboxTaskType): { sections: string[]; acceptance: str
 }
 
 export function parseTypedNextAction(line: string): { type: InboxTaskType; title: string } | null {
+  const structured = parseStructuredNextActions(line);
+  if (structured.length === 1) return structured[0]!;
+
   // Expected: "[type] Title..." where type in taxonomy.
   const m = line.trim().match(/^\[(maintenance|research|build|verify|curate)\]\s+(.+?)\s*$/i);
   if (!m) return null;

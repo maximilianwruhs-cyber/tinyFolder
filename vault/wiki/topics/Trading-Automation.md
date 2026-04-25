@@ -1,15 +1,11 @@
 ---
-title: Trading Automation
+title: "Trading Automation"
 type: topic
-tags:
-  - trading
-  - ibkr
-  - bitpanda
-  - automation
-  - finance
+role: canonical
+tags: [topic, canonical, edge-node, notebooklm, implementation-plan, research]
 sources: 3
 created: 'Mon Apr 13 2026 02:00:00 GMT+0200 (Central European Summer Time)'
-updated: '2026-04-24'
+updated: 2026-04-25
 ---
 # Trading Automation
 
@@ -42,6 +38,12 @@ Austrian-specific:
 
 - [[Sovereign-AI]] — Local processing of financial signals
 - [[Edge-Node]] — Potential host for trading agent
+
+## Takeout Source Index
+
+- Main clusters include OpenClaw financial operations, Q2 2026 global momentum, IBKR architecture, and autonomous trading-system handbooks.
+- Treat this topic as high-risk: keep claims source-bound and do not convert research notes into execution advice without explicit validation.
+- Corpus map: [[NotebookLM-Corpus-Map]].
 
 ## Sources
 

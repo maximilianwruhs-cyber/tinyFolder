@@ -1,10 +1,9 @@
 ---
-title: Dream Proposal — untitled-dream
+title: "Dream Proposal — untitled-dream"
 type: dream
-tags:
-  - dream
-  - proposal
-  - heartbeat
+role: generated
+retrieval_priority: low
+tags: [dream, generated]
 sources: 0
 created: '2026-04-22'
 updated: '2026-04-22'
