@@ -431,7 +431,7 @@ async function main() {
           run: async () => {
             const fp = writeTask("_doctor_think", { status: "pending", action: "think" }, "State your identity and phase in <= 40 words.");
             const ev: TaskEvent = { filePath: fp, fileName: "_doctor_think", status: "pending", body: "State your identity and phase in <= 40 words.", frontmatter: { status: "pending", action: "think" } };
-            await processTask(ev, watcher, pulse, store, memory);
+            await processTask(ev, watcher, env.vaultPath, pulse, store, memory);
             return { status: "PASS", summary: "Completed" };
           },
         }),
@@ -446,7 +446,7 @@ async function main() {
           run: async () => {
             const fp = writeTask("_doctor_search", { status: "pending", action: "search" }, "From the vault, explain PulseLoop and name 2 state variables.");
             const ev: TaskEvent = { filePath: fp, fileName: "_doctor_search", status: "pending", body: "From the vault, explain PulseLoop and name 2 state variables.", frontmatter: { status: "pending", action: "search" } };
-            await processTask(ev, watcher, pulse, store, memory);
+            await processTask(ev, watcher, env.vaultPath, pulse, store, memory);
             return { status: "PASS", summary: "Completed" };
           },
         }),
@@ -462,7 +462,7 @@ async function main() {
             const next = "_doctor_chain_step2.md";
             const fp = writeTask("_doctor_chain", { status: "pending", action: "chain", chain_next: next }, "Step 1: List exactly 3 subsystems.");
             const ev: TaskEvent = { filePath: fp, fileName: "_doctor_chain", status: "pending", body: "Step 1: List exactly 3 subsystems.", frontmatter: { status: "pending", action: "chain", chain_next: next } };
-            await processTask(ev, watcher, pulse, store, memory);
+            await processTask(ev, watcher, env.vaultPath, pulse, store, memory);
             const ok = fs.existsSync(join(env.inboxPath, next));
             if (!ok) return { status: "FAIL", summary: "Missing chain_next file", details: next };
             return { status: "PASS", summary: "Chain file created", details: next };
@@ -547,4 +547,3 @@ async function main() {
 }
 
 await main();
-
