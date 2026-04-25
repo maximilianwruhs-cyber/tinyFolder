@@ -205,7 +205,7 @@ export async function processTask(
         gatherVaultStateIndex({ vaultPath: vaultRoot, query: body }).catch(() => ""),
       ]);
 
-      // Hybrid retrieval: semantic + lexical.
+      // Hybrid retrieval: semantic + lexical (+ optional multi-query + rerank, gated via env).
       const topK = readIntEnv("GZMO_TOPK", 6, 1, 20);
       const results = enableV2 ? await searchVaultHybrid(body, embeddingStore, OLLAMA_API_URL, topK) : [];
       if (results.length > 0) {
@@ -219,6 +219,18 @@ export async function processTask(
         maxSnippets: readIntEnv("GZMO_EVIDENCE_MAX_SNIPPETS", 10, 1, 20),
         maxSnippetChars: readIntEnv("GZMO_EVIDENCE_MAX_CHARS", 900, 200, 4000),
       });
+
+      // Hard relevance thresholding (fail-closed).
+      // If retrieval couldn't find anything credible, do not pretend.
+      const minScore = Number.parseFloat(process.env.GZMO_MIN_RETRIEVAL_SCORE ?? "0.32");
+      if (results.length === 0 || !(Number.isFinite(minScore) ? results[0]!.score >= minScore : true)) {
+        evidencePacket = compileEvidencePacket({
+          localFacts: [localFacts, vaultIndex].filter(Boolean).join("\n"),
+          results: [],
+          maxSnippets: readIntEnv("GZMO_EVIDENCE_MAX_SNIPPETS", 10, 1, 20),
+          maxSnippetChars: readIntEnv("GZMO_EVIDENCE_MAX_CHARS", 900, 200, 4000),
+        });
+      }
       vaultContext = enableEvidence ? renderEvidencePacket(evidencePacket) : [localFacts, vaultIndex].filter(Boolean).join("\n");
     }
 

@@ -9,6 +9,7 @@
     "dev": "bun --watch run index.ts",
     "typecheck": "tsc --noEmit",
     "smoke": "bun run typecheck && bun test",
+    "eval:quality": "bun run src/eval_harness.ts",
     "proof:local-vault": "bun run proof_local_vault.ts",
     "smoke:full": "bun run smoke && bun run proof:local-vault",
     "lint:once": "bun run lint_once.ts",

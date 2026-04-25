@@ -9,7 +9,10 @@
  */
 
 import type { EmbeddingChunk, EmbeddingStore } from "./embeddings";
-import { lexicalSearchVault } from "./lexical_search";
+import { buildBm25Index, bm25SearchVault } from "./bm25";
+import { rerankWithLLM } from "./rerank_llm";
+import { rewriteQuery } from "./query_rewrite";
+import { buildAnchorIndex } from "./anchor_index";
 
 // ── Core Search ────────────────────────────────────────────────────
 
@@ -45,6 +48,82 @@ export interface SearchOptions {
   topK?: number;
   perFileLimit?: number;
   filters?: SearchFilters;
+}
+
+// BM25 index cache (store identity -> built index)
+const bm25Cache = new WeakMap<EmbeddingStore, ReturnType<typeof buildBm25Index>>();
+const anchorCache = new WeakMap<EmbeddingStore, ReturnType<typeof buildAnchorIndex>>();
+
+function getBm25Index(store: EmbeddingStore) {
+  const hit = bm25Cache.get(store);
+  if (hit) return hit;
+  const idx = buildBm25Index(store);
+  bm25Cache.set(store, idx);
+  return idx;
+}
+
+function getAnchorIndex(store: EmbeddingStore) {
+  const hit = anchorCache.get(store);
+  if (hit) return hit;
+  const idx = buildAnchorIndex(store);
+  anchorCache.set(store, idx);
+  return idx;
+}
+
+function applyAnchorPrior(query: string, results: SearchResult[], store: EmbeddingStore): SearchResult[] {
+  // Enable explicitly (cheap but not free).
+  const raw = (process.env.GZMO_ANCHOR_PRIOR ?? "").trim().toLowerCase();
+  if (!(raw === "1" || raw === "true" || raw === "yes" || raw === "on")) return results;
+
+  const idx = getAnchorIndex(store);
+  const q = query.toLowerCase();
+  const hot = idx.anchors
+    .slice(0, 80)
+    .map((a) => a.anchor)
+    .filter((a) => a && q.includes(a.toLowerCase()))
+    .slice(0, 12);
+  if (hot.length === 0) return results;
+
+  return results.map((r) => {
+    let bonus = 0;
+    const text = `${r.heading}\n${r.text}`.toLowerCase();
+    for (const a of hot) {
+      if (text.includes(a.toLowerCase())) bonus += 0.03;
+    }
+    return bonus ? { ...r, score: Math.min(1, r.score + bonus) } : r;
+  });
+}
+
+function rrfFuse(params: {
+  dense: SearchResult[];
+  lexical: SearchResult[];
+  k?: number; // RRF constant
+}): SearchResult[] {
+  const k = params.k ?? 60;
+  const fused = new Map<string, SearchResult & { _rrf: number }>();
+  const key = (r: SearchResult) => `${r.file}::${r.heading}::${(r.text ?? "").slice(0, 80)}`;
+
+  const addList = (list: SearchResult[]) => {
+    for (let rank = 0; rank < list.length; rank++) {
+      const r = list[rank]!;
+      const kk = key(r);
+      const contrib = 1 / (k + rank + 1);
+      const existing = fused.get(kk);
+      if (!existing) {
+        fused.set(kk, { ...r, _rrf: contrib });
+      } else {
+        existing._rrf += contrib;
+        existing.score = Math.max(existing.score, r.score);
+      }
+    }
+  };
+
+  addList(params.dense);
+  addList(params.lexical);
+
+  return [...fused.values()]
+    .sort((a, b) => b._rrf - a._rrf)
+    .map(({ _rrf, ...rest }) => rest);
 }
 
 export function resolveWikiLink(link: string, index: Map<string, string | string[]>): string | null {
@@ -171,34 +250,37 @@ export async function searchVaultHybrid(
   const topK = opts.topK ?? 3;
   const perFileLimit = opts.perFileLimit ?? topK;
 
-  const [vec, lex] = await Promise.all([
-    searchVault(query, store, ollamaUrl, { ...opts, topK: Math.max(topK, 6), perFileLimit }),
-    Promise.resolve(lexicalSearchVault(query, store, { ...opts, topK: Math.max(topK, 6), perFileLimit })),
-  ]);
+  const baseV1 = (process.env.OLLAMA_URL ?? "http://localhost:11434/v1");
+  const rewrites = await rewriteQuery({ query, ollamaBaseUrl: baseV1 });
 
-  // Merge by file+heading+text prefix.
-  const key = (r: SearchResult) => `${r.file}::${r.heading}::${(r.text ?? "").slice(0, 80)}`;
-  const merged = new Map<string, SearchResult>();
-
-  // Prefer vector score, but let lexical pull in exact matches.
-  for (const r of vec) merged.set(key(r), r);
-  for (const r of lex) {
-    const k = key(r);
-    const existing = merged.get(k);
-    if (!existing) {
-      merged.set(k, r);
-      continue;
-    }
-    // Combine scores (both are already in [0..1] range).
-    existing.score = Math.max(existing.score, r.score) * 0.7 + Math.min(1, existing.score + r.score) * 0.3;
+  const denseAll: SearchResult[] = [];
+  const lexAll: SearchResult[] = [];
+  for (const q of rewrites) {
+    const [vec, lex] = await Promise.all([
+      searchVault(q, store, ollamaUrl, { ...opts, topK: Math.max(topK, 10), perFileLimit }),
+      Promise.resolve(
+        bm25SearchVault(q, store, getBm25Index(store), { ...opts, topK: Math.max(topK, 10), perFileLimit }),
+      ),
+    ]);
+    denseAll.push(...applyAnchorPrior(q, vec, store));
+    lexAll.push(...applyAnchorPrior(q, lex, store));
   }
 
-  const scored = [...merged.values()].sort((a, b) => b.score - a.score);
+  let fused = rrfFuse({ dense: denseAll, lexical: lexAll, k: 60 });
+
+  // Optional LLM reranker (best-effort). Uses OpenAI-compatible base URL, not /api.
+  fused = await rerankWithLLM({
+    query,
+    candidates: fused,
+    ollamaBaseUrl: baseV1,
+    maxCandidates: 12,
+    timeoutMs: 6000,
+  });
 
   // Diversify by file path.
   const out: SearchResult[] = [];
   const perFile = new Map<string, number>();
-  for (const r of scored) {
+  for (const r of fused) {
     const n = perFile.get(r.file) ?? 0;
     if (n >= perFileLimit) continue;
     perFile.set(r.file, n + 1);

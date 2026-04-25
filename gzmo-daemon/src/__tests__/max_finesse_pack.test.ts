@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { EmbeddingStore } from "../embeddings";
-import { lexicalSearchVault } from "../lexical_search";
+import { bm25SearchVault, buildBm25Index } from "../bm25";
 import { searchVaultHybrid } from "../search";
 import { compileEvidencePacket, renderEvidencePacket } from "../evidence_packet";
 import { verifySafety } from "../verifier_safety";
@@ -56,9 +56,9 @@ function storeFixture(): EmbeddingStore {
 }
 
 describe("max finesse pack", () => {
-  test("lexicalSearchVault finds exact/path-like terms without network", () => {
+  test("bm25SearchVault finds exact/path-like terms without network", () => {
     const store = storeFixture();
-    const results = lexicalSearchVault("Where is TELEMETRY.json written?", store, { topK: 2, perFileLimit: 1 });
+    const results = bm25SearchVault("Where is TELEMETRY.json written?", store, buildBm25Index(store), { topK: 2, perFileLimit: 1 });
     expect(results.length).toBeGreaterThan(0);
     expect(results.map((r) => r.file)).toContain("wiki/entities/GZMO-Ops-Outputs.md");
   });

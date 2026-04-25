@@ -71,6 +71,12 @@ console.log(`  Ollama: ${OLLAMA_API_URL}`);
 console.log(`  Profile:${describeRuntimeProfile(runtime)}`);
 console.log("═══════════════════════════════════════════════");
 
+// Defaults for the “max finesse” retrieval stack (can be overridden by env).
+process.env.GZMO_MULTIQUERY ??= "on";
+process.env.GZMO_RERANK_LLM ??= "on";
+process.env.GZMO_ANCHOR_PRIOR ??= "on";
+process.env.GZMO_MIN_RETRIEVAL_SCORE ??= "0.32";
+
 // ── Ollama Readiness Gate ──────────────────────────────────────
 async function waitForOllama(url: string, maxRetries = 10): Promise<boolean> {
   for (let i = 0; i < maxRetries; i++) {
@@ -554,6 +560,61 @@ setInterval(async () => {
   const snap = pulse.snapshot();
   // Pruning checks every minute, Pruner internally ticks and only prunes if enough time passed
   await pruner.tick(snap.tension, snap.energy);
+}, 60_000);
+
+// ── Anchor indexing + eval quality reports (bounded, low frequency) ─────────
+let nextAnchorIndexTime = Date.now() + 25 * 60 * 1000; // warmup 25min
+let nextEvalQualityTime = Date.now() + 30 * 60 * 1000; // warmup 30min
+setInterval(async () => {
+  const snap = pulse.snapshot();
+  if (!snap.alive || snap.energy < 25) return;
+  const store = embeddings.getStore();
+  if (!store) return;
+
+  // Anchor index every 24h.
+  if (Date.now() >= nextAnchorIndexTime) {
+    try {
+      const { writeAnchorArtifacts } = await import("./src/anchor_index");
+      await writeAnchorArtifacts({ vaultPath: VAULT_PATH, store });
+      stream.log("🧷 Anchor index updated (GZMO/anchor-index.json).");
+    } catch (err: any) {
+      console.warn(`[ANCHOR] Failed: ${err?.message}`);
+    }
+    nextAnchorIndexTime = Date.now() + 24 * 60 * 60 * 1000;
+  }
+
+  // Eval harness every 12h.
+  if (Date.now() >= nextEvalQualityTime) {
+    try {
+      const { runEvalHarness } = await import("./src/eval_harness");
+      const res = await runEvalHarness();
+      const { safeWriteText, atomicWriteJson } = await import("./src/vault_fs");
+      await atomicWriteJson(VAULT_PATH, join(VAULT_PATH, "GZMO", "retrieval-metrics.json"), res, 2);
+      await safeWriteText(VAULT_PATH, join(VAULT_PATH, "GZMO", "rag-quality.md"), [
+        "---",
+        "type: operational_report",
+        `generated_at: ${new Date().toISOString()}`,
+        "---",
+        "",
+        "# RAG Quality Gate",
+        "",
+        `- ok: **${res.ok}**`,
+        `- summary: ${res.summary}`,
+        "",
+        "## Metrics",
+        "",
+        "```json",
+        JSON.stringify(res.metrics, null, 2),
+        "```",
+        "",
+        ...(res.details.length ? ["## Details", "", ...res.details.map((d) => `- ${d}`), ""] : []),
+      ].join("\n"));
+      stream.log(`🧪 Eval harness: ${res.ok ? "PASS" : "FAIL"} (see GZMO/rag-quality.md)`);
+    } catch (err: any) {
+      console.warn(`[EVAL] Failed: ${err?.message}`);
+    }
+    nextEvalQualityTime = Date.now() + 12 * 60 * 60 * 1000;
+  }
 }, 60_000);
 // Upgrade 4: LiveStream dashboard pulse (every 60s)
 setInterval(() => {
