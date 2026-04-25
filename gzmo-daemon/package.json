@@ -9,6 +9,8 @@
     "dev": "bun --watch run index.ts",
     "typecheck": "tsc --noEmit",
     "smoke": "bun run typecheck && bun test",
+    "proof:local-vault": "bun run proof_local_vault.ts",
+    "smoke:full": "bun run smoke && bun run proof:local-vault",
     "lint:once": "bun run lint_once.ts",
     "doctor": "bun run doctor.ts",
     "autofix:sessions": "bun run autofix_sessions_subset.ts"
