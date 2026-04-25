@@ -33,6 +33,8 @@ import { safeWriteText } from "./src/vault_fs";
 import { describeRuntimeProfile, resolveRuntimeProfile } from "./src/runtime_profile";
 import { EmbeddingsQueue } from "./src/embeddings_queue";
 import { writeHealth } from "./src/health";
+import { scoreSelfAskOutput } from "./src/self_ask_quality";
+import { writeSelfAskQualityReport } from "./src/self_ask_report";
 
 // ── Global Abort Controller (for graceful shutdown of in-flight inference) ──
 export const daemonAbort = new AbortController();
@@ -207,6 +209,75 @@ watcher.on("task", async (event) => {
     stream.log("💤 Idle. Waiting for tasks...");
   }
 });
+
+// ── Idle Connect Mode (force connection strengthening while idle) ─────────────
+// Runs additional Self-Ask cycles when the Inbox has no pending tasks.
+const IDLE_CONNECT = String(process.env.GZMO_IDLE_CONNECT_MODE ?? "").toLowerCase() === "on";
+let idleConnectRunning = false;
+let lastIdleConnectAt = 0;
+let idleConnectBackoffMs = 0;
+
+async function inboxHasPending(): Promise<boolean> {
+  try {
+    const inboxDir = join(VAULT_PATH, "GZMO", "Inbox");
+    const files = readdirSync(inboxDir).filter((f) => f.endsWith(".md"));
+    for (const f of files) {
+      try {
+        const raw = await Bun.file(join(inboxDir, f)).text();
+        if (/^\s*status:\s*pending\s*$/m.test(raw)) return true;
+      } catch {}
+    }
+  } catch {}
+  return false;
+}
+
+setInterval(async () => {
+  if (!IDLE_CONNECT) return;
+  if (!runtime.enableSelfAsk) return;
+  if (idleConnectRunning) return;
+  if (!embeddings.getStore()) return;
+  if (await inboxHasPending()) return; // stop immediately if a real task landed
+
+  const now = Date.now();
+  const baseCooldown = 8 * 60 * 1000; // 8 minutes
+  const cooldown = baseCooldown + idleConnectBackoffMs;
+  if (now - lastIdleConnectAt < cooldown) return;
+
+  const snap = pulse.snapshot();
+  // Reuse SelfAskEngine gating (it also checks energy/tension).
+  idleConnectRunning = true;
+  try {
+    const results = await selfAsk.cycle(snap, embeddings.getStore()!, OLLAMA_API_URL, infer);
+    if (results.length > 0) {
+      // lightweight quality aggregation: score based on citations/no-connection (no extra LLM calls)
+      const scores = results.map((r) => scoreSelfAskOutput({ output: r.output, packet: undefined }).score);
+      const avg = scores.reduce((a, b) => a + b, 0) / Math.max(1, scores.length);
+      // Backoff if quality is poor (prevents spam overnight)
+      idleConnectBackoffMs = avg < 55 ? Math.min(60 * 60 * 1000, idleConnectBackoffMs + 10 * 60 * 1000) : Math.max(0, idleConnectBackoffMs - 5 * 60 * 1000);
+      stream.log(`🧩 Idle-connect: ran self-ask (${results.length} results, quality~${avg.toFixed(0)}/100, backoff=${Math.round(idleConnectBackoffMs / 60000)}m)`);
+    }
+  } catch (err: any) {
+    console.warn(`[IDLE-CONNECT] self-ask failed: ${err?.message}`);
+    idleConnectBackoffMs = Math.min(60 * 60 * 1000, idleConnectBackoffMs + 10 * 60 * 1000);
+  } finally {
+    lastIdleConnectAt = Date.now();
+    idleConnectRunning = false;
+  }
+}, 60_000);
+
+// ── Self-Ask Quality Report (nightly-ish, lightweight) ──────────────────────
+let nextSelfAskReportTime = Date.now() + 20 * 60 * 1000; // warmup 20min
+setInterval(async () => {
+  if (!runtime.enableSelfAsk) return;
+  if (Date.now() < nextSelfAskReportTime) return;
+  try {
+    await writeSelfAskQualityReport({ vaultPath: VAULT_PATH, lookbackFiles: 80 });
+  } catch (err: any) {
+    console.warn(`[SELF-ASK-REPORT] Failed: ${err?.message}`);
+  }
+  // run every 12h (keeps it “overnight” without being noisy)
+  nextSelfAskReportTime = Date.now() + 12 * 60 * 60 * 1000;
+}, 60_000);
 
 // ── Boot Sequence (Ollama-gated) ──────────────────────────────
 (async () => {
