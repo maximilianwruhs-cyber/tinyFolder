@@ -22,8 +22,16 @@ vault/raw/
 
 # vault runtime artifacts (daemon writes constantly; keep out of git)
 vault/GZMO/CHAOS_STATE.json
+vault/GZMO/TELEMETRY.json
 vault/GZMO/Live_Stream.md
 vault/GZMO/health.md
+vault/GZMO/OPS_OUTPUTS.json
+vault/GZMO/perf.jsonl
+vault/GZMO/anchor-index.json
+vault/GZMO/anchor-report.md
+vault/GZMO/rag-quality.md
+vault/GZMO/retrieval-metrics.json
+vault/GZMO/self-ask-quality.md
 vault/GZMO/wiki-lint-report.md
 vault/GZMO/memory.json
 vault/GZMO/.gzmo-daemon.lock
@@ -39,6 +47,16 @@ vault/wiki/sources/
 vault/wiki/sessions/
 vault/wiki/log.md
 vault/wiki/index.md
+
+# local-only docs / learner state
+vault/docs/
+vault/wiki/learners/
+
+# local-only generated wiki maps / ops pages
+vault/wiki/00_MASTER_INDEX.md
+vault/wiki/Learners.md
+vault/wiki/entities/GZMO-Ops-Outputs.md
+vault/GZMO/vnext_comparison_report.md
 
 # OS / editor
 .DS_Store

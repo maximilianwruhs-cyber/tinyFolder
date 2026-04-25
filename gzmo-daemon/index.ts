@@ -35,6 +35,9 @@ import { EmbeddingsQueue } from "./src/embeddings_queue";
 import { writeHealth } from "./src/health";
 import { scoreSelfAskOutput } from "./src/self_ask_quality";
 import { writeSelfAskQualityReport } from "./src/self_ask_report";
+import { HoneypotPromotionEngine } from "./src/honeypot_promotion";
+import { compileCoreWisdom } from "./src/core_wisdom";
+import { writeOpsOutputsArtifacts } from "./src/ops_outputs_artifact";
 
 // ── Global Abort Controller (for graceful shutdown of in-flight inference) ──
 export const daemonAbort = new AbortController();
@@ -166,6 +169,10 @@ pulse.setTriggerDispatch((fired: TriggerFired[], snap: ChaosSnapshot) => {
 
 stream.log("🟢 Daemon started. Chaos Engine at 174 BPM.");
 
+// Always keep ops outputs artifacts mechanically correct (no LLM required).
+// This is a deterministic contract surface for ops questions.
+writeOpsOutputsArtifacts({ vaultPath: VAULT_PATH }).catch(() => {});
+
 // ── Initialize Task Memory ────────────────────────────────
 const memoryPath = join(VAULT_PATH, "GZMO", "memory.json");
 const memory = new TaskMemory(memoryPath);
@@ -190,6 +197,7 @@ async function bootEmbeddings(): Promise<void> {
 const watcher = new VaultWatcher(INBOX_PATH);
 
 let activeTaskCount = 0;
+let lastTaskCompletedAt = 0;
 
 watcher.on("task", async (event) => {
   if (!runtime.enableTaskProcessing) return;
@@ -201,6 +209,7 @@ watcher.on("task", async (event) => {
   try {
     await processTask(event, watcher, pulse, embeddings.getStore(), memory);
     stream.log(`✅ Task completed: **${event.fileName}**`);
+    lastTaskCompletedAt = Date.now();
 
     // Ensure completed tasks become searchable for RAG (Inbox is embedded, but not live-watched by default).
     if (embeddings.getStore()) {
@@ -215,6 +224,16 @@ watcher.on("task", async (event) => {
     stream.log("💤 Idle. Waiting for tasks...");
   }
 });
+
+function autonomyAllowed(): boolean {
+  // Backpressure rule: don't run autonomy while tasks are in flight,
+  // and don't start autonomy immediately after completion (protects p95).
+  const cooldownMs = Number.parseInt(process.env.GZMO_AUTONOMY_COOLDOWN_MS ?? "20000", 10);
+  const cool = Number.isFinite(cooldownMs) ? Math.max(0, cooldownMs) : 20000;
+  if (activeTaskCount > 0) return false;
+  if (lastTaskCompletedAt && Date.now() - lastTaskCompletedAt < cool) return false;
+  return true;
+}
 
 // ── Idle Connect Mode (force connection strengthening while idle) ─────────────
 // Runs additional Self-Ask cycles when the Inbox has no pending tasks.
@@ -243,6 +262,7 @@ setInterval(async () => {
   if (idleConnectRunning) return;
   if (!embeddings.getStore()) return;
   if (await inboxHasPending()) return; // stop immediately if a real task landed
+  if (!autonomyAllowed()) return;
 
   const now = Date.now();
   const baseCooldown = 8 * 60 * 1000; // 8 minutes
@@ -371,6 +391,7 @@ setInterval(async () => {
 
 // ── Initialize Dream Engine ────────────────────────────────
 const dreams = new DreamEngine(VAULT_PATH);
+const honeypotPromotion = new HoneypotPromotionEngine(VAULT_PATH);
 
 // Dream cycle: chaos-responsive interval (15-45min depending on tension)
 const DREAM_BASE_MS = 30 * 60 * 1000;
@@ -379,6 +400,7 @@ let nextDreamTime = Date.now() + DREAM_BASE_MS;
 setInterval(async () => {
   if (!runtime.enableDreams) return;
   if (Date.now() < nextDreamTime) return;
+  if (!autonomyAllowed()) return;
 
   const snap = pulse.snapshot();
   if (!snap.alive || snap.energy < 20) return;
@@ -400,6 +422,25 @@ setInterval(async () => {
     console.error(`[DREAM] Dream cycle error: ${err?.message}`);
   }
 
+  // Honeypot promotion pass: turn accumulated self-ask intersections into promoted nodes.
+  // Runs on the same cadence as dreams (bounded by promotion budget and digest).
+  try {
+    const promo = await honeypotPromotion.cycle();
+    if (promo.promoted > 0) {
+      stream.log(`🍯 Honeypot promotion: ${promo.promoted} nodes`);
+      for (const n of promo.nodes) stream.log(`🍯 Promoted honeypot: **${n}**`);
+    }
+  } catch {
+    // non-fatal
+  }
+
+  // Core Wisdom compiler pass: keep wiki/overview.md as the last honeypot.
+  try {
+    await compileCoreWisdom(VAULT_PATH, "Dream cycle maintenance pass");
+  } catch {
+    // non-fatal
+  }
+
   // Chaos-driven next interval: high tension = dream sooner, low = dream later
   const snap2 = pulse.snapshot();
   const tensionFactor = 1.0 - (snap2.tension / 100) * 0.5; // 0.5–1.0
@@ -407,6 +448,21 @@ setInterval(async () => {
   nextDreamTime = Date.now() + nextMs;
   console.log(`[DREAM] Next dream in ${(nextMs / 60000).toFixed(0)}min (tension=${snap2.tension.toFixed(0)})`);
 }, 60_000); // Check every minute
+
+// ── Core Wisdom cycle: runs hourly (lightweight) ─────────────────────────────
+const CORE_WISDOM_BASE_MS = 60 * 60 * 1000;
+let nextCoreWisdomTime = Date.now() + 7 * 60 * 1000; // warmup 7min
+
+setInterval(async () => {
+  if (Date.now() < nextCoreWisdomTime) return;
+  try {
+    await compileCoreWisdom(VAULT_PATH, "Scheduled core wisdom compilation");
+    stream.log("🧠 Core Wisdom updated: `wiki/overview.md`");
+  } catch (err: any) {
+    console.error(`[CORE_WISDOM] Compile failed: ${err?.message}`);
+  }
+  nextCoreWisdomTime = Date.now() + CORE_WISDOM_BASE_MS;
+}, 60_000);
 
 // ── Initialize Self-Ask Engine ─────────────────────────────
 const selfAsk = new SelfAskEngine(VAULT_PATH);
@@ -418,6 +474,7 @@ let nextSelfAskTime = Date.now() + SELFASK_BASE_MS;
 setInterval(async () => {
   if (!runtime.enableSelfAsk) return;
   if (Date.now() < nextSelfAskTime) return;
+  if (!autonomyAllowed()) return;
 
   const snap = pulse.snapshot();
   if (!snap.alive || !embeddings.getStore()) return;
@@ -470,6 +527,7 @@ let nextWikiTime = Date.now() + 5 * 60 * 1000; // First run after 5min warmup
 setInterval(async () => {
   if (!runtime.enableWiki) return;
   if (Date.now() < nextWikiTime) return;
+  if (!autonomyAllowed()) return;
 
   const snap = pulse.snapshot();
   if (!snap.alive || snap.energy < 25) return;
@@ -504,6 +562,7 @@ let nextIngestTime = Date.now() + 2 * 60 * 1000; // warmup 2min
 setInterval(async () => {
   if (!runtime.enableIngest) return;
   if (Date.now() < nextIngestTime) return;
+  if (!autonomyAllowed()) return;
 
   const snap = pulse.snapshot();
   if (!snap.alive || snap.energy < 30) return;
@@ -537,6 +596,7 @@ let nextLintTime = Date.now() + 10 * 60 * 1000; // first lint after 10min warmup
 setInterval(async () => {
   if (!runtime.enableWikiLint) return;
   if (Date.now() < nextLintTime) return;
+  if (!autonomyAllowed()) return;
   const snap = pulse.snapshot();
   if (!snap.alive || snap.energy < 25) return;
 

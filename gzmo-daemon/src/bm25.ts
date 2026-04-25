@@ -95,7 +95,8 @@ export function bm25SearchVault(
   const N = store.chunks.length;
 
   for (let i = 0; i < N; i++) {
-    const c = store.chunks[i]!;
+    const c = store.chunks[i];
+    if (!c) continue;
     const meta = c.metadata;
 
     if (typeFilter.length > 0) {
@@ -109,7 +110,8 @@ export function bm25SearchVault(
 
     const s = bm25Score({
       qTokens,
-      docTf: index.tf[i]!,
+      // Defensive: older/partial indexes or sparse chunk arrays should not crash retrieval.
+      docTf: index.tf[i] ?? new Map<string, number>(),
       docLen: index.docLen[i] ?? 0,
       avgdl: index.avgdl,
       df: index.df,

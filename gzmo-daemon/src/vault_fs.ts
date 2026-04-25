@@ -12,6 +12,7 @@
 import { dirname, relative, resolve, sep } from "path";
 import { mkdirSync, renameSync, writeFileSync } from "fs";
 import { mkdir, rename } from "fs/promises";
+import { appendFile } from "fs/promises";
  
 export class VaultPathError extends Error {
   constructor(message: string) {
@@ -76,6 +77,18 @@ export async function atomicWriteText(vaultRoot: string, targetPath: string, con
   await ensureParentDir(abs);
   const tmp = abs + ".tmp";
   await Bun.write(tmp, content);
+  // Bun.write may return before the file is observable on some FS setups.
+  // Fail-closed: ensure the tmp exists before rename to avoid spurious ENOENT.
+  try {
+    const ok = await Bun.file(tmp).exists();
+    if (!ok) {
+      // As a last resort, fall back to non-atomic write rather than crashing the daemon.
+      await Bun.write(abs, content);
+      return;
+    }
+  } catch {
+    // ignore
+  }
   await rename(tmp, abs);
 }
  
@@ -93,5 +106,16 @@ export async function atomicWriteJson(vaultRoot: string, targetPath: string, val
  
 export function atomicWriteJsonSync(vaultRoot: string, targetPath: string, value: unknown, space = 2): void {
   atomicWriteTextSync(vaultRoot, targetPath, JSON.stringify(value, null, space));
+}
+
+/**
+ * Append a single JSONL line safely (vault-contained + raw-protected).
+ * Creates the parent directory if it doesn't exist.
+ */
+export async function safeAppendJsonl(vaultRoot: string, targetPath: string, value: unknown): Promise<void> {
+  const { abs } = resolveVaultPath(vaultRoot, targetPath);
+  await ensureParentDir(abs);
+  const line = JSON.stringify(value) + "\n";
+  await appendFile(abs, line, "utf-8");
 }
  

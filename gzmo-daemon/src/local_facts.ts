@@ -18,6 +18,17 @@ async function readFirstN(fileAbs: string, maxChars: number): Promise<string | n
 }
 
 async function fileFact(label: string, abs: string, previewChars = 600): Promise<string | null> {
+  if (previewChars <= 0) {
+    // Inventory mode: keep facts compact; existence is enough.
+    try {
+      const f = Bun.file(abs);
+      const ok = f.size > 0;
+      return `- ${label}: \`${abs}\` (${ok ? "exists" : "missing or empty"})`;
+    } catch {
+      return `- ${label}: \`${abs}\` (missing or unreadable)`;
+    }
+  }
+
   const preview = await readFirstN(abs, previewChars);
   if (!preview) return `- ${label}: \`${abs}\` (missing or empty)`;
   return [
@@ -41,6 +52,12 @@ export async function gatherLocalFacts(params: {
   query: string;
 }): Promise<string> {
   const q = normalizeQuery(params.query);
+  const wantsInventory =
+    /\boperational\b/.test(q) ||
+    /\boutputs?\b/.test(q) ||
+    /\bwrites?\b/.test(q) ||
+    /\bwritten\b/.test(q);
+
   const wantsOps =
     /\btelemetry\b/.test(q) ||
     /\bhealth\b/.test(q) ||
@@ -56,13 +73,20 @@ export async function gatherLocalFacts(params: {
   const telemetryAbs = join(params.vaultPath, "GZMO", "TELEMETRY.json");
   const healthAbs = join(params.vaultPath, "GZMO", "health.md");
   const embeddingsAbs = join(params.vaultPath, "GZMO", "embeddings.json");
+  const opsOutputsAbs = join(params.vaultPath, "GZMO", "OPS_OUTPUTS.json");
 
   if (q.includes("telemetry") || q.includes("health") || q.includes("json") || q.includes("write") || q.includes("where")) {
-    facts.push(await fileFact("telemetry", telemetryAbs, 900) as string);
-    facts.push(await fileFact("health", healthAbs, 700) as string);
+    // In inventory-mode, keep the deterministic facts extremely compact so they don't crowd out
+    // the vault state index in the Evidence Packet.
+    facts.push(await fileFact("telemetry", telemetryAbs, wantsInventory ? 0 : 900) as string);
+    facts.push(await fileFact("health", healthAbs, wantsInventory ? 0 : 700) as string);
   }
   if (q.includes("embed")) {
-    facts.push(await fileFact("embeddings_store", embeddingsAbs, 500) as string);
+    facts.push(await fileFact("embeddings_store", embeddingsAbs, wantsInventory ? 0 : 500) as string);
+  }
+  if (wantsInventory || q.includes("output")) {
+    // The code-defined contract surface for "what does the daemon write?"
+    facts.push(await fileFact("ops_outputs_registry", opsOutputsAbs, wantsInventory ? 900 : 600) as string);
   }
 
   // Minimal code loci (cheap, stable): where health/telemetry is written.
@@ -71,7 +95,7 @@ export async function gatherLocalFacts(params: {
     { label: "code:daemon_entry", abs: join(import.meta.dir, "..", "index.ts") },
   ];
 
-  if (q.includes("telemetry") || q.includes("health") || q.includes("where") || q.includes("write") || q.includes("json")) {
+  if (!wantsInventory && (q.includes("telemetry") || q.includes("health") || q.includes("where") || q.includes("write") || q.includes("json"))) {
     for (const t of codeSnippetTargets) {
       const preview = await readFirstN(t.abs, 800);
       if (!preview) continue;

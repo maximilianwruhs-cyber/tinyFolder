@@ -33,6 +33,7 @@ import { compileEvidencePacket, renderEvidencePacket, type EvidencePacket } from
 import { selfEvalAndRewrite } from "./self_eval";
 import { verifySafety } from "./verifier_safety";
 import { scoreSelfAskOutput } from "./self_ask_quality";
+import { appendEdgeCandidate, extractEdgeCandidate } from "./honeypot_edges";
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "hermes3:8b";
@@ -91,6 +92,16 @@ const MIN_SIMILARITY_GAP = 0.05;  // Floor for gap detective (avoid noise chunks
 const MAX_SIMILARITY_GAP = 0.55;  // Ceiling (above this = too similar, was 0.35 but domain vaults are denser)
 const SPACED_REPETITION_DAYS = 7; // Re-visit entries older than this
 const HONEYPOT_DIR = "GZMO/Thought_Cabinet/honeypots";
+const CABINET_ROOT = ["GZMO", "Thought_Cabinet"] as const;
+const DREAMS_SUBDIR = "dreams";
+
+function cabinetSubdirForStrategy(strategy: SelfAskStrategy): string {
+  switch (strategy) {
+    case "gap_detective": return "gap_detective";
+    case "contradiction_scan": return "contradiction_scan";
+    case "spaced_repetition": return "spaced_repetition";
+  }
+}
 
 // ── CFD Prompt Templates (Constraints First!) ──────────────────
 
@@ -303,7 +314,7 @@ export class SelfAskEngine {
   ): Promise<SelfAskResult | null> {
     try {
       // Find the most recent dream file
-      const cabinetDir = path.join(this.vaultPath, "GZMO", "Thought_Cabinet");
+      const cabinetDir = path.join(this.vaultPath, ...CABINET_ROOT, DREAMS_SUBDIR);
       let dreams: string[] = [];
       try {
         dreams = (await fsp.readdir(cabinetDir))
@@ -395,7 +406,7 @@ export class SelfAskEngine {
   ): Promise<SelfAskResult | null> {
     try {
       // Find vault files not referenced by any recent dream
-      const cabinetDir = path.join(this.vaultPath, "GZMO", "Thought_Cabinet");
+      const cabinetDir = path.join(this.vaultPath, ...CABINET_ROOT, DREAMS_SUBDIR);
       const cutoff = Date.now() - (SPACED_REPETITION_DAYS * 24 * 60 * 60 * 1000);
 
       // Collect all files referenced in recent dreams
@@ -503,7 +514,7 @@ export class SelfAskEngine {
     honeypotData: string,
     packet?: EvidencePacket,
   ): Promise<string> {
-    const cabinetDir = path.join(this.vaultPath, "GZMO", "Thought_Cabinet");
+    const cabinetDir = path.join(this.vaultPath, ...CABINET_ROOT, cabinetSubdirForStrategy(strategy));
     try { mkdirSync(cabinetDir, { recursive: true }); } catch {}
 
     const now = new Date();
@@ -606,6 +617,20 @@ export class SelfAskEngine {
 
     await Bun.write(filepath, content);
     console.log(`[SELF-ASK] Written: ${filename}`);
+
+    // Emit canonical edge candidates for recursive honeypot layers.
+    // Only strategies that propose intersections participate.
+    if (strategy === "gap_detective" || strategy === "spaced_repetition") {
+      const edge = extractEdgeCandidate({
+        strategy,
+        output: finalOutput,
+        relatedFiles,
+        cabinetFile: filename,
+      });
+      if (edge) {
+        await appendEdgeCandidate(this.vaultPath, edge).catch(() => {});
+      }
+    }
 
     // Closed loop: only actionable assessments promote tasks.
     if (assessment.signal === "actionable" && assessment.nextActions.length > 0) {

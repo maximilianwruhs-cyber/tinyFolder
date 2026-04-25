@@ -1,5 +1,6 @@
 import { join } from "path";
 import { promises as fsp } from "fs";
+import { OUTPUTS_REGISTRY } from "./outputs_registry";
 
 function normalizeQuery(q: string): string {
   return String(q ?? "").toLowerCase();
@@ -29,6 +30,8 @@ export async function gatherVaultStateIndex(params: {
     /\bwhere\b/.test(q) ||
     /\bpath\b/.test(q) ||
     /\boutput\b/.test(q) ||
+    /\boperational\b/.test(q) ||
+    /\bwrites?\b/.test(q) ||
     /\bindex\b/.test(q);
 
   if (!wantsOps) return "";
@@ -40,20 +43,14 @@ export async function gatherVaultStateIndex(params: {
     .slice(0, 80)
     .map((n) => `- \`${join(gzmoDir, n)}\``);
 
-  // Known outputs (canonical pointers)
-  const known = [
-    join(params.vaultPath, "GZMO", "TELEMETRY.json"),
-    join(params.vaultPath, "GZMO", "health.md"),
-    join(params.vaultPath, "GZMO", "embeddings.json"),
-    join(params.vaultPath, "wiki", "entities", "GZMO-Ops-Outputs.md"),
-  ];
-
-  const knownLines = known.map((p) => `- \`${p}\``);
+  const operationalLines = OUTPUTS_REGISTRY.map((o) =>
+    `- \`${join(params.vaultPath, o.path)}\` — ${o.purpose}`
+  );
 
   return [
     "\n## Vault State Index (deterministic)",
-    "Known canonical outputs:",
-    ...knownLines,
+    "Operational outputs (paths + purpose):",
+    ...operationalLines,
     "",
     "Top-level `GZMO/` entries (directory listing):",
     ...(interesting.length ? interesting : ["- (missing or unreadable)"]),

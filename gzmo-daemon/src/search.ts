@@ -48,6 +48,8 @@ export interface SearchOptions {
   topK?: number;
   perFileLimit?: number;
   filters?: SearchFilters;
+  // vNext: search mode influences rewrite/rerank budgets.
+  mode?: "fast" | "deep";
 }
 
 // BM25 index cache (store identity -> built index)
@@ -160,6 +162,8 @@ export async function searchVault(
   const perFileLimit = opts.perFileLimit ?? topK;
   const typeFilter = (opts.filters?.types ?? []).map((t) => t.toLowerCase());
   const tagFilter = (opts.filters?.tags ?? []).map((t) => t.toLowerCase());
+  const allowDocs =
+    /(?:^|[\s`"'(])docs\/[A-Za-z0-9_\-./]+\.md(?=$|[\s`"'),.;:!?])/i.test(query);
 
   // Embed the query
   const resp = await fetch(`${ollamaUrl}/api/embeddings`, {
@@ -199,6 +203,17 @@ export async function searchVault(
       if (chunk.file.toLowerCase().includes("hardware-profile")) score += 0.18;
       if (type === "index" || chunk.file.toLowerCase().endsWith("/index.md") || chunk.file.toLowerCase().endsWith("wiki/index.md")) score -= 1.0;
       if (retrieval === "low") score -= 0.08;
+      // Prefer core routing artifacts when referenced or when the query is governance-like.
+      // This reduces dependence on rerank for common operational routing questions.
+      if (chunk.file === "wiki/overview.md") score += 0.10;
+      if (chunk.file === "wiki/00_MASTER_INDEX.md") score += 0.10;
+      if (chunk.file === "wiki/START.md") score += 0.06;
+      // docs/ is non-canonical and must not influence default retrieval.
+      // Only allow it to surface when explicitly referenced in the query.
+      if (chunk.file.startsWith("docs/")) {
+        if (!allowDocs) score -= 2.0;
+        else score -= 0.25;
+      }
 
       return {
         file: chunk.file,
@@ -249,9 +264,12 @@ export async function searchVaultHybrid(
   const opts: SearchOptions = typeof topKOrOptions === "number" ? { topK: topKOrOptions } : (topKOrOptions ?? {});
   const topK = opts.topK ?? 3;
   const perFileLimit = opts.perFileLimit ?? topK;
+  const mode = opts.mode ?? "deep";
 
   const baseV1 = (process.env.OLLAMA_URL ?? "http://localhost:11434/v1");
-  const rewrites = await rewriteQuery({ query, ollamaBaseUrl: baseV1 });
+  const rewrites = mode === "fast"
+    ? [query]
+    : await rewriteQuery({ query, ollamaBaseUrl: baseV1 });
 
   const denseAll: SearchResult[] = [];
   const lexAll: SearchResult[] = [];
@@ -268,21 +286,73 @@ export async function searchVaultHybrid(
 
   let fused = rrfFuse({ dense: denseAll, lexical: lexAll, k: 60 });
 
+  // If the user explicitly mentions vault-relative markdown paths, force-include them.
+  // We apply this both pre- and post-rerank to prevent the reranker from dropping the exact target.
+  const explicitPaths = [...new Set(
+    [...query.matchAll(/(?:^|[\s`"'(])((?:wiki|GZMO|docs)\/[A-Za-z0-9_\-./]+\.md)(?=$|[\s`"'),.;:!?])/g)]
+      .map((m) => m[1] ?? "")
+      .filter((s) => Boolean(s)),
+  )];
+  const forceIncludePaths = (candidates: SearchResult[]): SearchResult[] => {
+    if (!explicitPaths.length) return candidates;
+    const seenCount = new Map<string, number>();
+    for (const r of candidates) seenCount.set(r.file, (seenCount.get(r.file) ?? 0) + 1);
+    const injected: SearchResult[] = [];
+    for (const p of explicitPaths) {
+      // Find best chunk for this file, biased toward the section the user asked for.
+      const fileChunks = store.chunks.filter((x) => x.file === p || x.file.endsWith(`/${p}`));
+      if (!fileChunks.length) continue;
+      const wantEntryPoints = /entry\s*points/i.test(query);
+      const wantReadOrder = /read\s*order/i.test(query);
+      const pick1 =
+        (wantEntryPoints ? fileChunks.find((c) => /entry\s*points/i.test(`${c.heading}\n${c.text}`)) : undefined) ??
+        (wantReadOrder ? fileChunks.find((c) => /read\s*order/i.test(`${c.heading}\n${c.text}`)) : undefined) ??
+        // fallback: pick the longest chunk (more likely to include the relevant subsection)
+        fileChunks.reduce((best, cur) => (String(cur.text ?? "").length > String(best.text ?? "").length ? cur : best), fileChunks[0]!);
+
+      // Also include a second chunk from the same file if it targets the requested section
+      // and differs from the first chunk. This is important for index pages where the
+      // frontmatter/H1 chunk is separate from "Entry Points" / "Read Order".
+      const pick2 =
+        (wantEntryPoints ? fileChunks.find((c) => c !== pick1 && /entry\s*points/i.test(`${c.heading}\n${c.text}`)) : undefined) ??
+        (wantReadOrder ? fileChunks.find((c) => c !== pick1 && /read\s*order/i.test(`${c.heading}\n${c.text}`)) : undefined) ??
+        undefined;
+
+      // Allow up to 2 chunks from an explicitly requested file.
+      for (const pick of [pick1, pick2].filter(Boolean) as any[]) {
+        const n = seenCount.get(pick.file) ?? 0;
+        if (n >= 2) continue;
+        injected.push({ file: pick.file, heading: pick.heading, text: pick.text, score: 1.0, metadata: pick.metadata });
+        seenCount.set(pick.file, n + 1);
+      }
+    }
+    return injected.length ? [...injected, ...candidates] : candidates;
+  };
+  fused = forceIncludePaths(fused);
+
   // Optional LLM reranker (best-effort). Uses OpenAI-compatible base URL, not /api.
-  fused = await rerankWithLLM({
-    query,
-    candidates: fused,
-    ollamaBaseUrl: baseV1,
-    maxCandidates: 12,
-    timeoutMs: 6000,
-  });
+  if (mode === "deep") {
+    fused = await rerankWithLLM({
+      query,
+      candidates: fused,
+      ollamaBaseUrl: baseV1,
+      maxCandidates: 12,
+      timeoutMs: 6000,
+    });
+  }
+  fused = forceIncludePaths(fused);
 
   // Diversify by file path.
   const out: SearchResult[] = [];
   const perFile = new Map<string, number>();
+  const explicitSet = new Set(explicitPaths);
   for (const r of fused) {
     const n = perFile.get(r.file) ?? 0;
-    if (n >= perFileLimit) continue;
+    const isExplicit =
+      explicitSet.has(r.file) ||
+      [...explicitSet].some((p) => r.file === p || r.file.endsWith(`/${p}`));
+    const limitForFile = isExplicit ? Math.max(perFileLimit, 2) : perFileLimit;
+    if (n >= limitForFile) continue;
     perFile.set(r.file, n + 1);
     out.push(r);
     if (out.length >= topK) break;

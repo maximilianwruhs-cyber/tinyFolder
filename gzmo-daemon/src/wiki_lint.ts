@@ -5,6 +5,7 @@ import { atomicWriteText } from "./vault_fs";
 import { appendWikiLogEntry } from "./wiki_log";
 import { writeSchemaCompliantWikiPage } from "./wiki_contract";
 import { rebuildWikiIndex } from "./wiki_index";
+import { validateCoreWisdom } from "./core_wisdom_validate";
 
 export interface WikiLintFinding {
   kind: "missing_frontmatter" | "invalid_frontmatter" | "broken_link" | "orphan" | "stale";
@@ -166,6 +167,17 @@ export async function runWikiLint(vaultPath: string, opts?: { staleDays?: number
     if (inCount === 0) {
       findings.push({ kind: "orphan", page: p.rel, details: "No inbound wikilinks from other wiki pages." });
     }
+  }
+
+  // Core Wisdom validation (treat as part of wiki health).
+  // Note: keep findings in the same report format for operator visibility.
+  try {
+    const coreFindings = await validateCoreWisdom(vaultPath);
+    for (const f of coreFindings) {
+      findings.push({ kind: "invalid_frontmatter", page: "wiki/overview.md", details: `[core_wisdom] ${f.kind}: ${f.details}` });
+    }
+  } catch {
+    // non-fatal
   }
 
   const report: WikiLintReport = {

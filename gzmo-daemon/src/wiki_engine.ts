@@ -53,6 +53,32 @@ interface WikiDigest {
   lastIntrospection: string;    // ISO timestamp of last system scan
 }
 
+async function listCabinetMarkdownRecursive(cabinetAbs: string): Promise<string[]> {
+  const out: string[] = [];
+  async function walk(dirAbs: string): Promise<void> {
+    let ents: Array<{ name: string; isDir: boolean; isFile: boolean }> = [];
+    try {
+      const raw = await fsp.readdir(dirAbs, { withFileTypes: true });
+      ents = raw.map((e) => ({ name: e.name, isDir: e.isDirectory(), isFile: e.isFile() }));
+    } catch {
+      return;
+    }
+    for (const e of ents) {
+      if (e.name.startsWith(".")) continue;
+      const full = join(dirAbs, e.name);
+      if (e.isDir) {
+        await walk(full);
+      } else if (e.isFile && e.name.endsWith(".md")) {
+        // Never consolidate honeypot engine stores (they are structured outputs, not text notes).
+        if (full.includes("/honeypots/")) continue;
+        out.push(full);
+      }
+    }
+  }
+  await walk(cabinetAbs);
+  return out;
+}
+
 // ── WikiEngine ─────────────────────────────────────────────
 export class WikiEngine {
   private readonly vaultPath: string;
@@ -164,8 +190,9 @@ export class WikiEngine {
     // Find all cabinet entries not yet consolidated
     let cabinetFiles: string[];
     try {
-      const files = await fsp.readdir(this.cabinetPath);
-      cabinetFiles = files
+      const absFiles = await listCabinetMarkdownRecursive(this.cabinetPath);
+      const relFiles = absFiles.map((abs) => abs.replace(this.cabinetPath + "/", ""));
+      cabinetFiles = relFiles
         .filter((f) => f.endsWith(".md"))
         .filter((f) => !this.digest.consolidated.includes(f));
     } catch {

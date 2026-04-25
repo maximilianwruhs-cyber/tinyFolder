@@ -3,6 +3,31 @@ import { promises as fsp } from "fs";
 import { safeWriteText } from "./vault_fs";
 import { scoreSelfAskOutput } from "./self_ask_quality";
 
+async function listMarkdownFilesRecursive(rootAbs: string): Promise<string[]> {
+  const out: string[] = [];
+  async function walk(dirAbs: string): Promise<void> {
+    let ents: Array<{ name: string; isDir: boolean; isFile: boolean }> = [];
+    try {
+      const raw = await fsp.readdir(dirAbs, { withFileTypes: true });
+      ents = raw.map((e) => ({ name: e.name, isDir: e.isDirectory(), isFile: e.isFile() }));
+    } catch {
+      return;
+    }
+
+    for (const e of ents) {
+      if (e.name.startsWith(".")) continue;
+      const full = join(dirAbs, e.name);
+      if (e.isDir) {
+        await walk(full);
+      } else if (e.isFile && e.name.endsWith(".md")) {
+        out.push(full);
+      }
+    }
+  }
+  await walk(rootAbs);
+  return out;
+}
+
 async function safeRead(fileAbs: string): Promise<string> {
   try {
     return await Bun.file(fileAbs).text();
@@ -25,20 +50,22 @@ export async function writeSelfAskQualityReport(params: {
   const cabinetDir = join(params.vaultPath, "GZMO", "Thought_Cabinet");
   const lookback = params.lookbackFiles ?? 80;
 
-  let files: string[] = [];
+  let filesAbs: string[] = [];
   try {
-    files = (await fsp.readdir(cabinetDir))
-      .filter((f) => f.endsWith("_gap_detective.md") || f.endsWith("_spaced_repetition.md") || f.endsWith("_contradiction_scan.md"))
+    filesAbs = (await listMarkdownFilesRecursive(cabinetDir))
+      .filter((abs) => {
+        const f = abs.split("/").pop() ?? abs;
+        return f.endsWith("_gap_detective.md") || f.endsWith("_spaced_repetition.md") || f.endsWith("_contradiction_scan.md");
+      })
       .sort()
       .reverse()
       .slice(0, lookback);
   } catch {
-    files = [];
+    filesAbs = [];
   }
 
   const rows: Array<{ file: string; score: number; hasCites: boolean; noConn: boolean; issues: string[] }> = [];
-  for (const f of files) {
-    const abs = join(cabinetDir, f);
+  for (const abs of filesAbs) {
     const raw = await safeRead(abs);
     if (!raw) continue;
 
@@ -46,7 +73,7 @@ export async function writeSelfAskQualityReport(params: {
     const body = raw.split("\n---\n").slice(1).join("\n---\n");
     const scored = scoreSelfAskOutput({ output: body, packet: undefined });
     rows.push({
-      file: f,
+      file: abs.replace(cabinetDir + "/", ""),
       score: fmScore ?? scored.score,
       hasCites: scored.citations.unique > 0,
       noConn: scored.noConnection,

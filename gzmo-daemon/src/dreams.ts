@@ -32,6 +32,9 @@ const RECENT_DREAM_COMPARE = 20;
 const MIN_SUMMARY_LENGTH = 120;
 const DUPLICATE_SIMILARITY = 0.72;
 
+const CABINET_DIR = ["GZMO", "Thought_Cabinet"] as const;
+const DREAMS_SUBDIR = "dreams";
+
 interface DreamResult {
   taskFile: string;
   insights: string;
@@ -361,7 +364,7 @@ export class DreamEngine {
     relatedFiles: SearchResult[] = [],
     qualityScore: number,
   ): Promise<string> {
-    const cabinetDir = path.join(this.vaultPath, "GZMO", "Thought_Cabinet");
+    const cabinetDir = path.join(this.vaultPath, ...CABINET_DIR, DREAMS_SUBDIR);
     try {
       await fsp.mkdir(cabinetDir, { recursive: true });
     } catch {
@@ -565,7 +568,7 @@ export class DreamEngine {
   }
 
   private async loadRecentDreams(limit: number): Promise<RecentDream[]> {
-    const cabinetDir = path.join(this.vaultPath, "GZMO", "Thought_Cabinet");
+    const cabinetDir = path.join(this.vaultPath, ...CABINET_DIR, DREAMS_SUBDIR);
     try {
       const files = (await fsp.readdir(cabinetDir))
         .filter((file) => file.endsWith("_dream.md"))
