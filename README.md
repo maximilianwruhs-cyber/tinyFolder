@@ -28,16 +28,12 @@ What makes it “smart” (and not just “chat”):
 - **Small-model scaffolding**: extraction templates + multi-pass verification to keep smaller local models reliable.
 - **Overnight self-improvement**: self-ask/wiki loops strengthen vault connections, with quality reports.
 
-If you want screenshots/GIFs in the README, add them to `assets/` and link them here.
-
 ### ✨ Highlights
 
 - **Local-first**: everything is files on disk (no cloud DB required).
 - **Vault RAG**: indexes your vault into embeddings for grounded answers.
 - **Autonomy loops**: pulse/chaos + dreams + self-ask + wiki consolidation.
 - **Obsidian-friendly**: works naturally with a vault layout.
-
----
 
 ## 🧭 Table of contents
 
