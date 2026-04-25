@@ -1,4 +1,4 @@
-## 📁 tinyFolder (GZMO daemon)
+## 📁 tinyFolder
 
 **What this repo is**: a local-first, filesystem-driven AI daemon (Bun + Ollama) that reads **Markdown task files** from your vault inbox, routes them by YAML frontmatter (`action: think | search | chain`), and appends results back into the same files.
 
