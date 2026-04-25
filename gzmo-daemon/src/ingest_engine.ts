@@ -9,7 +9,7 @@
  */
  
 import { join, basename, extname, relative, resolve } from "path";
-import { existsSync, readdirSync, readFileSync } from "fs";
+import { existsSync, promises as fsp } from "fs";
 import { atomicWriteJson, resolveVaultPath } from "./vault_fs";
 import { writeSchemaCompliantWikiPage } from "./wiki_contract";
 import { appendWikiLogEntry } from "./wiki_log";
@@ -27,14 +27,14 @@ function isoNow(): string {
   return new Date().toISOString();
 }
  
-function walkRawMdFiles(rawRootAbs: string): string[] {
+async function walkRawMdFiles(rawRootAbs: string): Promise<string[]> {
   const out: string[] = [];
   const stack: string[] = [rawRootAbs];
   while (stack.length) {
     const dir = stack.pop()!;
     let entries;
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch {
       continue;
     }
@@ -80,15 +80,19 @@ export class IngestEngine {
     this.vaultPath = vaultPath;
     this.rawPath = join(vaultPath, "raw");
     this.digestPath = join(vaultPath, "GZMO", ".gzmo_ingest_digest.json");
-    this.digest = this.loadDigest();
+    this.digest = { processed: [], lastRun: "" };
+  }
+
+  async init(): Promise<void> {
+    this.digest = await this.loadDigest();
   }
  
-  private loadDigest(): IngestDigest {
+  private async loadDigest(): Promise<IngestDigest> {
     try {
       const file = Bun.file(this.digestPath);
       // Bun.file().size is 0 for non-existent files
       if (file.size === 0) return { processed: [], lastRun: "" };
-      const raw = readFileSync(this.digestPath, "utf-8");
+      const raw = await Bun.file(this.digestPath).text();
       const parsed = JSON.parse(raw) as IngestDigest;
       return {
         processed: Array.isArray(parsed.processed) ? parsed.processed.map(String) : [],
@@ -119,7 +123,7 @@ export class IngestEngine {
     if (!existsSync(this.rawPath)) return null;
  
     // Discover candidates
-    const rawFilesAbs = walkRawMdFiles(this.rawPath);
+    const rawFilesAbs = await walkRawMdFiles(this.rawPath);
     const processed = new Set(this.digest.processed);
  
     let nextAbs: string | null = null;

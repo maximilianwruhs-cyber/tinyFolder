@@ -3,8 +3,9 @@ import { existsSync, readFileSync } from "fs";
 import * as crypto from "crypto";
 import { safeWriteText, atomicWriteJson } from "./vault_fs";
 import { parseStructuredNextActions } from "./structured";
+import type { InboxTaskType } from "./task_types";
 
-export type InboxTaskType = "maintenance" | "research" | "build" | "verify" | "curate";
+
 
 export interface AutoTaskSpec {
   type: InboxTaskType;
