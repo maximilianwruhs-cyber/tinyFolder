@@ -13,6 +13,7 @@ import { promises as fsp } from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import matter from "gray-matter";
+import { cpus } from "os";
 import { atomicWriteJson, resolveVaultPath } from "./vault_fs";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -76,11 +77,31 @@ async function embedText(
   });
 
   if (!resp.ok) {
-    throw new Error(`Embedding failed: ${resp.status} ${resp.statusText}`);
+    const err = new Error(`Embedding failed: ${resp.status} ${resp.statusText}`);
+    (err as any).status = resp.status;
+    throw err;
   }
 
   const data = await resp.json() as { embedding: number[] };
   return data.embedding;
+}
+
+function resolveEmbedConcurrency(requested: string | undefined): number {
+  const raw = (requested ?? "4").trim().toLowerCase();
+  if (raw === "auto") {
+    const cores = Math.max(1, cpus()?.length ?? 1);
+    // Conservative default: keep parallelism below what can starve the event loop.
+    return Math.max(2, Math.min(8, Math.floor(cores / 2)));
+  }
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(32, n) : 4;
+}
+
+function shouldBackoffEmbeddingError(err: unknown): boolean {
+  const status = typeof (err as any)?.status === "number" ? (err as any).status as number : null;
+  if (status === 429 || status === 503 || status === 502) return true;
+  const msg = String((err as any)?.message ?? err ?? "");
+  return /\b429\b|\btoo many requests\b|\brate limit\b|\boverloaded\b/i.test(msg);
 }
 
 /** Compute L2 magnitude of a vector. */
@@ -251,8 +272,7 @@ export async function syncEmbeddings(
     const chunks = chunkMarkdown(content, file);
     const metadata = extractMetadata(content, file);
 
-    const concurrencyStr = process.env.EMBED_CONCURRENCY || "4";
-    const concurrency = parseInt(concurrencyStr, 10) || 4;
+    let concurrency = resolveEmbedConcurrency(process.env.EMBED_CONCURRENCY);
     const chunksToEmbed: Array<{ chunk: { heading: string; text: string }; hash: string }> = [];
 
     for (const chunk of chunks) {
@@ -279,9 +299,10 @@ export async function syncEmbeddings(
       chunksToEmbed.push({ chunk, hash });
     }
 
-    // Embed new chunks in bounded-concurrency batches (Ollama-friendly).
+    // Embed new chunks in bounded-concurrency batches (Ollama-friendly + adaptive backoff).
     for (let i = 0; i < chunksToEmbed.length; i += concurrency) {
       const batch = chunksToEmbed.slice(i, i + concurrency);
+      let backoff = false;
       await Promise.all(batch.map(async ({ chunk, hash }) => {
         try {
           const vector = await embedText(chunk.text, ollamaUrl);
@@ -298,8 +319,12 @@ export async function syncEmbeddings(
           embedded++;
         } catch (err) {
           console.warn(`[EMBED] Failed to embed chunk from ${file}:`, err);
+          if (shouldBackoffEmbeddingError(err)) backoff = true;
         }
       }));
+      if (backoff && concurrency > 1) {
+        concurrency = Math.max(1, Math.floor(concurrency / 2));
+      }
     }
   }
 
@@ -350,11 +375,11 @@ export async function embedSingleFile(
   // Chunk and embed
   const chunks = chunkMarkdown(content, relPath);
   const metadata = extractMetadata(content, relPath);
-  const concurrencyStr = process.env.EMBED_CONCURRENCY || "4";
-  const concurrency = parseInt(concurrencyStr, 10) || 4;
+  let concurrency = resolveEmbedConcurrency(process.env.EMBED_CONCURRENCY);
 
   for (let i = 0; i < chunks.length; i += concurrency) {
     const batch = chunks.slice(i, i + concurrency);
+    let backoff = false;
     await Promise.all(batch.map(async (chunk) => {
       try {
         const vector = await embedText(chunk.text, ollamaUrl);
@@ -370,8 +395,12 @@ export async function embedSingleFile(
         });
       } catch {
         // Skip failed chunks
+        backoff = true;
       }
     }));
+    if (backoff && concurrency > 1) {
+      concurrency = Math.max(1, Math.floor(concurrency / 2));
+    }
   }
 
   // Persist atomically via Bun.write

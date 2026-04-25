@@ -99,7 +99,15 @@ function buildSystemPrompt(
 
   // Inject vault search context (action: search)
   if (vaultContext) {
-    prompt += vaultContext;
+    prompt += [
+      "",
+      "Grounding rules (when context is provided):",
+      "- Treat 'Local Facts (deterministic)' and 'Relevant Vault Context' as the only allowed evidence sources.",
+      "- For each non-trivial claim, cite evidence by quoting or pointing to the exact file/path shown in the context.",
+      "- If evidence is missing, say 'insufficient evidence' and suggest the next deterministic check.",
+      "",
+      vaultContext,
+    ].join("\n");
   }
 
   // Inject episodic memory (~100 tokens)

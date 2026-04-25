@@ -456,10 +456,15 @@ export class SelfAskEngine {
 
     const wikiLinks = [...new Set(relatedFiles)].map(f => `- [[${f}]]`);
 
-    const nextActions = [
-      "- [verify] If this result is actionable, convert it into a concrete inbox task and validate against the vault.",
-      "- [research] If this result is 'No connection found' / 'No Information', tighten query scope or improve source coverage.",
-    ];
+    const assessment = assessSelfAskOutput(strategy, output, relatedFiles);
+    // Only actionable assessments produce typed next actions (and thus tasks).
+    // For non-actionable outputs, keep human-readable guidance without task typing.
+    const nextActions = assessment.signal === "actionable"
+      ? assessment.nextActions
+      : [
+        "- If actionable, convert into a concrete Inbox task and validate against the vault.",
+        "- If no-signal, tighten query scope or improve source coverage.",
+      ];
 
     const content = [
       "---",
@@ -497,25 +502,29 @@ export class SelfAskEngine {
     await Bun.write(filepath, content);
     console.log(`[SELF-ASK] Written: ${filename}`);
 
-    // Closed loop: only typed next actions become inbox tasks.
-    const typed = nextActions
-      .map((line) => ({ raw: line, parsed: parseTypedNextAction(line.replace(/^-+\s*/, "")) }))
-      .filter((x) => x.parsed !== null) as Array<{ raw: string; parsed: { type: any; title: string } }>;
-    if (typed.length > 0) {
-      const tasks: AutoTaskSpec[] = typed.map((t) => ({
-        type: t.parsed.type,
-        title: t.parsed.title,
-        body: [
-          `Source: Self-Ask \`${strategy}\` via \`${filename}\`.`,
-          "",
-          "Context:",
-          "```",
-          output.slice(0, 1200),
-          "```",
-        ].join("\n"),
-        source: { subsystem: "self_ask", sourceFile: filename },
-      }));
-      await createAutoInboxTasks({ vaultPath: this.vaultPath, tasks }).catch(() => {});
+    // Closed loop: only actionable assessments promote tasks.
+    if (assessment.signal === "actionable" && assessment.nextActions.length > 0) {
+      const typed = assessment.nextActions
+        .map((line) => ({ raw: line, parsed: parseTypedNextAction(line.replace(/^-+\s*/, "")) }))
+        .filter((x) => x.parsed !== null) as Array<{ raw: string; parsed: { type: any; title: string } }>;
+      if (typed.length > 0) {
+        const tasks: AutoTaskSpec[] = typed.map((t) => ({
+          type: t.parsed.type,
+          title: t.parsed.title,
+          body: [
+            `Source: Self-Ask \`${strategy}\` via \`${filename}\`.`,
+            "",
+            "Context:",
+            "```",
+            output.slice(0, 1200),
+            "```",
+            "",
+            `Assessment: signal=${assessment.signal}; reasons=${assessment.reasons.join("; ") || "(none)"}`,
+          ].join("\n"),
+          source: { subsystem: "self_ask", sourceFile: filename },
+        }));
+        await createAutoInboxTasks({ vaultPath: this.vaultPath, tasks }).catch(() => {});
+      }
     }
 
     return filepath;
