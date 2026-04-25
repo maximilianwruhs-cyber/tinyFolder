@@ -9,6 +9,7 @@
  */
 
 import type { EmbeddingChunk, EmbeddingStore } from "./embeddings";
+import { lexicalSearchVault } from "./lexical_search";
 
 // ── Core Search ────────────────────────────────────────────────────
 
@@ -153,6 +154,57 @@ export async function searchVault(
     if (out.length >= topK) break;
   }
 
+  return out;
+}
+
+/**
+ * Hybrid retrieval: vector (semantic) + lexical (exact/path/schema).
+ * Merges and re-ranks with diversification.
+ */
+export async function searchVaultHybrid(
+  query: string,
+  store: EmbeddingStore,
+  ollamaUrl: string = "http://localhost:11434",
+  topKOrOptions: number | SearchOptions = 3,
+): Promise<SearchResult[]> {
+  const opts: SearchOptions = typeof topKOrOptions === "number" ? { topK: topKOrOptions } : (topKOrOptions ?? {});
+  const topK = opts.topK ?? 3;
+  const perFileLimit = opts.perFileLimit ?? topK;
+
+  const [vec, lex] = await Promise.all([
+    searchVault(query, store, ollamaUrl, { ...opts, topK: Math.max(topK, 6), perFileLimit }),
+    Promise.resolve(lexicalSearchVault(query, store, { ...opts, topK: Math.max(topK, 6), perFileLimit })),
+  ]);
+
+  // Merge by file+heading+text prefix.
+  const key = (r: SearchResult) => `${r.file}::${r.heading}::${(r.text ?? "").slice(0, 80)}`;
+  const merged = new Map<string, SearchResult>();
+
+  // Prefer vector score, but let lexical pull in exact matches.
+  for (const r of vec) merged.set(key(r), r);
+  for (const r of lex) {
+    const k = key(r);
+    const existing = merged.get(k);
+    if (!existing) {
+      merged.set(k, r);
+      continue;
+    }
+    // Combine scores (both are already in [0..1] range).
+    existing.score = Math.max(existing.score, r.score) * 0.7 + Math.min(1, existing.score + r.score) * 0.3;
+  }
+
+  const scored = [...merged.values()].sort((a, b) => b.score - a.score);
+
+  // Diversify by file path.
+  const out: SearchResult[] = [];
+  const perFile = new Map<string, number>();
+  for (const r of scored) {
+    const n = perFile.get(r.file) ?? 0;
+    if (n >= perFileLimit) continue;
+    perFile.set(r.file, n + 1);
+    out.push(r);
+    if (out.length >= topK) break;
+  }
   return out;
 }
 
