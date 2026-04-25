@@ -1,6 +1,5 @@
 import { join } from "path";
-import { existsSync, readFileSync } from "fs";
-import { safeWriteText } from "./vault_fs";
+import { atomicWriteJson, safeWriteText } from "./vault_fs";
 
 export interface HealthSnapshot {
   generatedAt: string;
@@ -18,6 +17,9 @@ export interface HealthSnapshot {
     tick: number;
     thoughtsIncubating: number;
     thoughtsCrystallized: number;
+    llmTemperature?: number;
+    llmMaxTokens?: number;
+    llmValence?: number;
   };
   paths: {
     vaultPath: string;
@@ -46,20 +48,35 @@ export interface HealthSnapshot {
   };
 }
 
-function safeCount(dir: string, predicate: (name: string) => boolean): number {
-  try {
-    if (!existsSync(dir)) return 0;
-    const entries = readFileSync; // keep import set minimal
-    // Use Bun to list when possible, but stay compatible: fallback to readdirSync isn't imported here.
-    // We'll parse via `Bun.file` is async; this health is sync-ish. Keep it simple using spawn-free approach:
-    // Read directory listing via Bun (works in bun runtime).
-    const names: string[] = (Bun as any).file(dir).exists ? [] : [];
-    void entries;
-    // We can't reliably read dir without readdirSync; keep it in main health writer where readdirSync exists.
-    return 0;
-  } catch {
-    return 0;
-  }
+export interface TelemetrySnapshot {
+  generatedAt: string;
+  runtime: HealthSnapshot["runtime"] & {
+    inference: {
+      temperature: number | null;
+      maxTokens: number | null;
+      valence: number | null;
+    };
+  };
+  state: {
+    alive: boolean;
+    phase: string;
+    tension: number;
+    energy: number;
+    tick: number;
+    deaths: number;
+  };
+  workload: {
+    inbox: {
+      pending: number;
+      processing: number;
+      completed: number;
+      failed: number;
+    };
+    cabinetNotes: number;
+    quarantineNotes: number;
+  };
+  scheduler: HealthSnapshot["scheduler"];
+  operatorHints: string[];
 }
 
 export async function writeHealth(params: {
@@ -67,16 +84,7 @@ export async function writeHealth(params: {
   profile: string;
   ollamaUrl: string;
   model: string;
-  pulse: {
-    tension: number;
-    energy: number;
-    phase: string;
-    alive: boolean;
-    deaths: number;
-    tick: number;
-    thoughtsIncubating: number;
-    thoughtsCrystallized: number;
-  };
+  pulse: HealthSnapshot["pulse"];
   scheduler: HealthSnapshot["scheduler"];
   counts: HealthSnapshot["counts"];
 }): Promise<void> {
@@ -160,5 +168,53 @@ export async function writeHealth(params: {
   ].join("\n");
 
   await safeWriteText(vaultPath, healthPath, md);
+
+  const telemetry: TelemetrySnapshot = {
+    generatedAt: snap.generatedAt,
+    runtime: {
+      ...snap.runtime,
+      inference: {
+        temperature: snap.pulse.llmTemperature ?? null,
+        maxTokens: snap.pulse.llmMaxTokens ?? null,
+        valence: snap.pulse.llmValence ?? null,
+      },
+    },
+    state: {
+      alive: snap.pulse.alive,
+      phase: snap.pulse.phase,
+      tension: Number(snap.pulse.tension.toFixed(1)),
+      energy: Number(snap.pulse.energy.toFixed(0)),
+      tick: snap.pulse.tick,
+      deaths: snap.pulse.deaths,
+    },
+    workload: {
+      inbox: {
+        pending: snap.counts.inboxPending,
+        processing: snap.counts.inboxProcessing,
+        completed: snap.counts.inboxCompleted,
+        failed: snap.counts.inboxFailed,
+      },
+      cabinetNotes: snap.counts.cabinetNotes,
+      quarantineNotes: snap.counts.quarantineNotes,
+    },
+    scheduler: snap.scheduler,
+    operatorHints: buildOperatorHints(snap),
+  };
+
+  await atomicWriteJson(vaultPath, join(vaultPath, "GZMO", "TELEMETRY.json"), telemetry, 2);
+}
+
+function buildOperatorHints(snap: HealthSnapshot): string[] {
+  const hints: string[] = [];
+  if (!snap.pulse.alive) hints.push("Pulse is not alive; restart daemon if this persists.");
+  if (snap.counts.inboxPending > 20) hints.push("Inbox backlog is high; process verify and maintenance tasks first.");
+  if (snap.counts.inboxProcessing > 0) hints.push("Tasks are currently processing; avoid starting another daemon instance.");
+  if (snap.counts.inboxFailed > 0) hints.push("Failed inbox tasks exist; inspect recent failures before adding more autonomy.");
+  if (snap.counts.quarantineNotes > 0) hints.push("Quarantine contains notes; review upstream prompt or gate before trusting new wiki output.");
+  if (!snap.scheduler.embeddingsLiveEnabled) hints.push("Embeddings live sync is disabled; restart with live sync for fresher RAG.");
+  if (snap.pulse.energy < 30) hints.push("Energy is low; autonomous dream/self-ask cycles may pause.");
+  if (snap.pulse.tension > 70) hints.push("Tension is high; prefer verification and pruning over generative work.");
+  if (hints.length === 0) hints.push("No immediate operator action suggested.");
+  return hints;
 }
 

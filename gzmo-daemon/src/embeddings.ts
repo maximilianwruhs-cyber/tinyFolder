@@ -11,6 +11,7 @@
 import { existsSync, readdirSync } from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import matter from "gray-matter";
 import { atomicWriteJson, resolveVaultPath } from "./vault_fs";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -23,6 +24,15 @@ export interface EmbeddingChunk {
   vector: number[];       // embedding vector
   magnitude: number;      // pre-computed L2 norm for O(1) cosine sim
   updatedAt: string;      // ISO timestamp
+  metadata?: {
+    pathBucket: string;
+    type?: string;
+    tags: string[];
+    role?: string;
+    retrievalPriority?: string;
+    status?: string;
+    updated?: string;
+  };
 }
 
 export interface EmbeddingStore {
@@ -119,6 +129,58 @@ function chunkMarkdown(content: string, filePath: string): Array<{ heading: stri
   return chunks;
 }
 
+function extractMetadata(content: string, relPath: string): NonNullable<EmbeddingChunk["metadata"]> {
+  let data: Record<string, unknown> = {};
+  try {
+    data = matter(content).data ?? {};
+  } catch {
+    data = {};
+  }
+
+  const defaults = metadataDefaultsForPath(relPath);
+  const tags = [...new Set([...defaults.tags, ...readTags(data.tags)])];
+
+  return {
+    pathBucket: relPath.split("/")[0] ?? "",
+    type: readScalar(data.type) ?? defaults.type,
+    tags,
+    role: readScalar(data.role) ?? defaults.role,
+    retrievalPriority: readScalar(data.retrieval_priority) ?? defaults.retrievalPriority,
+    status: readScalar(data.status),
+    updated: readScalar(data.updated),
+  };
+}
+
+function metadataDefaultsForPath(relPath: string): Pick<NonNullable<EmbeddingChunk["metadata"]>, "tags" | "type" | "role" | "retrievalPriority"> {
+  const normalized = relPath.replace(/\\/g, "/");
+  if (normalized.startsWith("GZMO/Thought_Cabinet/")) {
+    return { tags: ["gzmo", "thought-cabinet", "generated"], type: "generated", role: "generated", retrievalPriority: "low" };
+  }
+  if (normalized.startsWith("GZMO/Inbox/")) {
+    return { tags: ["gzmo", "inbox", "task"], type: "task", role: "operational", retrievalPriority: "medium" };
+  }
+  if (normalized.startsWith("wiki/")) {
+    return { tags: ["wiki"], role: "canonical", retrievalPriority: "high" };
+  }
+  return { tags: [], retrievalPriority: "medium" };
+}
+
+function readScalar(value: unknown): string | undefined {
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const s = String(value).trim();
+  return s || undefined;
+}
+
+function readTags(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((tag) => String(tag).replace(/^#/, "").trim().toLowerCase()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value.split(/[\s,]+/).map((tag) => tag.replace(/^#/, "").trim().toLowerCase()).filter(Boolean);
+  }
+  return [];
+}
+
 /**
  * SHA256 hash of content for dedup.
  */
@@ -186,6 +248,11 @@ export async function syncEmbeddings(
     if (content.trim().length < 50) continue;
 
     const chunks = chunkMarkdown(content, file);
+    const metadata = extractMetadata(content, file);
+
+    const concurrencyStr = process.env.EMBED_CONCURRENCY || "4";
+    const concurrency = parseInt(concurrencyStr, 10) || 4;
+    const chunksToEmbed: Array<{ chunk: { heading: string; text: string }; hash: string }> = [];
 
     for (const chunk of chunks) {
       const hash = hashContent(chunk.text);
@@ -202,27 +269,36 @@ export async function syncEmbeddings(
           vector: existing.vector,
           magnitude: existing.magnitude ?? vectorMagnitude(existing.vector),
           updatedAt: new Date().toISOString(),
+          metadata,
         });
         skipped++;
         continue;
       }
 
-      // Embed new chunk
-      try {
-        const vector = await embedText(chunk.text, ollamaUrl);
-        newChunks.push({
-          file,
-          heading: chunk.heading,
-          text: chunk.text.slice(0, 500), // store truncated for space
-          hash,
-          vector,
-          magnitude: vectorMagnitude(vector),
-          updatedAt: new Date().toISOString(),
-        });
-        embedded++;
-      } catch (err) {
-        console.warn(`[EMBED] Failed to embed chunk from ${file}:`, err);
-      }
+      chunksToEmbed.push({ chunk, hash });
+    }
+
+    // Embed new chunks in bounded-concurrency batches (Ollama-friendly).
+    for (let i = 0; i < chunksToEmbed.length; i += concurrency) {
+      const batch = chunksToEmbed.slice(i, i + concurrency);
+      await Promise.all(batch.map(async ({ chunk, hash }) => {
+        try {
+          const vector = await embedText(chunk.text, ollamaUrl);
+          newChunks.push({
+            file,
+            heading: chunk.heading,
+            text: chunk.text.slice(0, 500), // store truncated for space
+            hash,
+            vector,
+            magnitude: vectorMagnitude(vector),
+            updatedAt: new Date().toISOString(),
+            metadata,
+          });
+          embedded++;
+        } catch (err) {
+          console.warn(`[EMBED] Failed to embed chunk from ${file}:`, err);
+        }
+      }));
     }
   }
 
@@ -272,21 +348,29 @@ export async function embedSingleFile(
 
   // Chunk and embed
   const chunks = chunkMarkdown(content, relPath);
-  for (const chunk of chunks) {
-    try {
-      const vector = await embedText(chunk.text, ollamaUrl);
-      store.chunks.push({
-        file: relPath,
-        heading: chunk.heading,
-        text: chunk.text.slice(0, 500),
-        hash: hashContent(chunk.text),
-        vector,
-        magnitude: vectorMagnitude(vector),
-        updatedAt: new Date().toISOString(),
-      });
-    } catch {
-      // Skip failed chunks
-    }
+  const metadata = extractMetadata(content, relPath);
+  const concurrencyStr = process.env.EMBED_CONCURRENCY || "4";
+  const concurrency = parseInt(concurrencyStr, 10) || 4;
+
+  for (let i = 0; i < chunks.length; i += concurrency) {
+    const batch = chunks.slice(i, i + concurrency);
+    await Promise.all(batch.map(async (chunk) => {
+      try {
+        const vector = await embedText(chunk.text, ollamaUrl);
+        store.chunks.push({
+          file: relPath,
+          heading: chunk.heading,
+          text: chunk.text.slice(0, 500),
+          hash: hashContent(chunk.text),
+          vector,
+          magnitude: vectorMagnitude(vector),
+          updatedAt: new Date().toISOString(),
+          metadata,
+        });
+      } catch {
+        // Skip failed chunks
+      }
+    }));
   }
 
   // Persist atomically via Bun.write

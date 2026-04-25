@@ -17,6 +17,7 @@ export interface SearchResult {
   heading: string;
   text: string;
   score: number;
+  metadata?: EmbeddingChunk["metadata"];
 }
 
 // Cache for pre-computed magnitudes (avoids recomputing on every search)
@@ -34,6 +35,35 @@ function getMagnitude(vec: number[]): number {
 
 const MIN_RELEVANCE = 0.3; // Skip chunks below 30% similarity
 
+export interface SearchFilters {
+  types?: string[];
+  tags?: string[];
+}
+
+export interface SearchOptions {
+  topK?: number;
+  perFileLimit?: number;
+  filters?: SearchFilters;
+}
+
+export function resolveWikiLink(link: string, index: Map<string, string | string[]>): string | null {
+  const key = String(link ?? "").trim();
+  if (!key) return null;
+  const norm = key.toLowerCase();
+
+  // Prefer path-qualified keys if present.
+  if (norm.includes("/")) {
+    const hit = index.get(norm);
+    return typeof hit === "string" ? hit : null;
+  }
+
+  const hit = index.get(norm);
+  if (!hit) return null;
+  // Reject ambiguous basenames.
+  if (Array.isArray(hit)) return null;
+  return hit;
+}
+
 /**
  * Search the embedding store for chunks most similar to the query.
  */
@@ -41,9 +71,15 @@ export async function searchVault(
   query: string,
   store: EmbeddingStore,
   ollamaUrl: string = "http://localhost:11434",
-  topK: number = 3,
+  topKOrOptions: number | SearchOptions = 3,
 ): Promise<SearchResult[]> {
   if (store.chunks.length === 0) return [];
+
+  const opts: SearchOptions = typeof topKOrOptions === "number" ? { topK: topKOrOptions } : (topKOrOptions ?? {});
+  const topK = opts.topK ?? 3;
+  const perFileLimit = opts.perFileLimit ?? topK;
+  const typeFilter = (opts.filters?.types ?? []).map((t) => t.toLowerCase());
+  const tagFilter = (opts.filters?.tags ?? []).map((t) => t.toLowerCase());
 
   // Embed the query
   const resp = await fetch(`${ollamaUrl}/api/embeddings`, {
@@ -72,18 +108,52 @@ export async function searchVault(
       let dot = 0;
       for (let i = 0; i < queryVec.length; i++) dot += queryVec[i]! * chunk.vector[i]!;
 
+      let score = dot / (queryMag * chunkMag);
+
+      // Small-LLM retrieval priors (lightweight heuristics).
+      const role = chunk.metadata?.role?.toLowerCase();
+      const type = chunk.metadata?.type?.toLowerCase();
+      const retrieval = chunk.metadata?.retrievalPriority?.toLowerCase();
+
+      if (role === "canonical") score += 0.12;
+      if (chunk.file.toLowerCase().includes("hardware-profile")) score += 0.18;
+      if (type === "index" || chunk.file.toLowerCase().endsWith("/index.md") || chunk.file.toLowerCase().endsWith("wiki/index.md")) score -= 1.0;
+      if (retrieval === "low") score -= 0.08;
+
       return {
         file: chunk.file,
         heading: chunk.heading,
         text: chunk.text,
-        score: dot / (queryMag * chunkMag),
+        score,
+        metadata: chunk.metadata,
       };
     })
     .filter((r) => r.score >= MIN_RELEVANCE)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK);
+    .filter((r) => {
+      if (typeFilter.length > 0) {
+        const t = (r.metadata?.type ?? "").toLowerCase();
+        if (!t || !typeFilter.includes(t)) return false;
+      }
+      if (tagFilter.length > 0) {
+        const tags = (r.metadata?.tags ?? []).map((t) => t.toLowerCase());
+        if (!tagFilter.every((t) => tags.includes(t))) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => b.score - a.score);
 
-  return scored;
+  // Diversify by file path.
+  const out: SearchResult[] = [];
+  const perFile = new Map<string, number>();
+  for (const r of scored) {
+    const n = perFile.get(r.file) ?? 0;
+    if (n >= perFileLimit) continue;
+    perFile.set(r.file, n + 1);
+    out.push(r);
+    if (out.length >= topK) break;
+  }
+
+  return out;
 }
 
 /**
@@ -92,9 +162,12 @@ export async function searchVault(
 export function formatSearchContext(results: SearchResult[]): string {
   if (results.length === 0) return "";
 
-  const sections = results.map((r, i) =>
-    `[${i + 1}] ${r.file} — ${r.heading} (${(r.score * 100).toFixed(0)}%):\n${r.text}`
-  );
+  const sections = results.map((r, i) => {
+    const meta = r.metadata
+      ? `\nMetadata: type=${r.metadata.type ?? "?"}; role=${r.metadata.role ?? "?"}; tags=${(r.metadata.tags ?? []).join(",")}`
+      : "";
+    return `[${i + 1}] ${r.file} — ${r.heading} (${(r.score * 100).toFixed(0)}%):\n${r.text}${meta}`;
+  });
 
   return `\n## Relevant Vault Context\n${sections.join("\n\n")}`;
 }

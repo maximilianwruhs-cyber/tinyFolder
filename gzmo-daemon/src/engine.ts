@@ -239,9 +239,13 @@ export async function processTask(
 
     // 12. Handle chain action — create next task
     if (action === "chain" && frontmatter?.chain_next) {
-      const nextTask = String(frontmatter.chain_next);
+      const { basename, dirname, join } = await import("path");
+
+      // Sanitize nextTask to prevent path traversal (only allow basename).
+      let nextTask = basename(String(frontmatter.chain_next));
+      if (!nextTask.endsWith(".md")) nextTask += ".md";
+
       console.log(`[ENGINE] Chain → next task: ${nextTask}`);
-      const { dirname, join } = await import("path");
       const chainPath = join(dirname(filePath), nextTask);
       const chainContent = `---\nstatus: pending\naction: think\nchain_from: ${fileName}\n---\n\n## Chained Task\n\nPrevious context:\n${fullText.slice(0, 300)}\n\nContinue from here.`;
 

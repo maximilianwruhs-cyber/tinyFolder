@@ -43,6 +43,38 @@ export interface SelfAskResult {
   timestamp: string;
 }
 
+export function assessSelfAskOutput(
+  strategy: SelfAskStrategy,
+  output: string,
+  sources: string[],
+): { signal: "none" | "blocked" | "actionable"; nextActions: string[]; reasons: string[] } {
+  const raw = String(output ?? "").trim();
+  const reasons: string[] = [];
+
+  if (!raw) return { signal: "none", nextActions: [], reasons: ["empty output"] };
+
+  if (/\bno connection found\b/i.test(raw)) {
+    reasons.push("explicit no-signal result");
+    return { signal: "none", nextActions: [], reasons };
+  }
+
+  if (/\buser_interaction_logs?[_-]/i.test(raw) || /\bsearch_results\.csv\b/i.test(raw)) {
+    reasons.push("mentions unsupported external evidence");
+    return { signal: "blocked", nextActions: [], reasons };
+  }
+
+  if (strategy === "contradiction_scan" && /\bcontradict/i.test(raw)) {
+    const src = sources.length ? ` (sources: ${sources.slice(0, 3).join(", ")})` : "";
+    return {
+      signal: "actionable",
+      nextActions: [`- [verify] Resolve contradiction surfaced by self-ask${src}`],
+      reasons: ["contradiction flagged"],
+    };
+  }
+
+  return { signal: "blocked", nextActions: [], reasons: ["insufficiently concrete"] };
+}
+
 // ── Configuration ──────────────────────────────────────────────
 
 const MAX_AUTO_TASKS_PER_CYCLE = 3;
