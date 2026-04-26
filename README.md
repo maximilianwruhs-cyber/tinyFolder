@@ -7,7 +7,7 @@ A small intelligence trapped in a folder: feed it a Markdown task, and it answer
 
 This README is written as a **setup + operations playbook** so any agent can deterministically:
 
-- install prerequisites
+- install prer%equisites
 - create a correct vault scaffold
 - configure environment variables
 - start/stop/monitor the daemon
