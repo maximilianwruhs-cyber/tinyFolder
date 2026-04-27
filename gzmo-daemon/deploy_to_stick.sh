@@ -1,7 +1,10 @@
 #!/bin/bash
-
+#
+# Ubuntu Linux only: rsync layout assumes a typical /media/$USER mount and
+# Ollama model paths under /usr/share/ollama. Adjust if your distro differs.
+#
 # Usage: ./deploy_to_stick.sh [/path/to/mountpoint]
-# Deploys tinyFolder OS to a local USB stick for offline sovereign execution.
+# Deploys this repo + sibling vault snapshot to a USB stick for offline use on Linux hosts.
 
 # Default stick path (updates automatically to current user)
 STICK="${1:-/media/$USER/GZMO1}"
@@ -34,7 +37,7 @@ rsync -av --delete "$VAULT_DIR/" \
 
 echo ""
 echo "3. Syncing Ollama Models (Hermes3 & Nomic)..."
-# This allows running 'OLLAMA_MODELS=/media/.../ollama_models ollama serve' portably 
+# Offline bundle: run with OLLAMA_MODELS pointing at this directory on the target Linux host.
 rsync -av --delete /usr/share/ollama/.ollama/models/ \
       "$STICK/ollama_models/"
 

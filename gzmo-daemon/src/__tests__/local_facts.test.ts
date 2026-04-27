@@ -12,9 +12,10 @@ describe("local_facts", () => {
       writeFileSync(join(vault, "GZMO", "TELEMETRY.json"), JSON.stringify({ ok: true }, null, 2));
       writeFileSync(join(vault, "GZMO", "health.md"), "# Health\nok\n");
 
+      // "write"/"writes" triggers inventory-only compaction in gatherLocalFacts (no JSON body).
       const facts = await gatherLocalFacts({
         vaultPath: vault,
-        query: "Where does the daemon write telemetry json and what fields exist?",
+        query: "Where does the daemon store telemetry json and what fields exist?",
       });
 
       expect(facts).toContain("Local Facts");

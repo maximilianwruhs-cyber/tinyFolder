@@ -1,19 +1,6 @@
-## 📁 tinyFolder - This isn’t an app. It’s a presence.
-A small intelligence trapped in a folder: feed it a Markdown task, and it answers in place.
+## tinyFolder
 
-**What this repo is**: a local-first, filesystem-driven AI daemon (Bun + Ollama) that reads **Markdown task files** from your vault inbox, routes them by YAML frontmatter (`action: think | search | chain`), and appends results back into the same files.
-
-**How you “talk” to it**: you don’t use a chat UI. You create a `.md` file in `GZMO/Inbox/` with `status: pending` and an `action`, and the daemon does the rest.
-
-This README is written as a **setup + operations playbook** so any agent can deterministically:
-
-- install prer%equisites
-- create a correct vault scaffold
-- configure environment variables
-- start/stop/monitor the daemon
-- submit tasks
-- validate retrieval quality and stability
-- troubleshoot failures without guessing
+GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `search` / `chain`). Checklist and contract: [`AGENTS.md`](AGENTS.md).
 
 ---
 
@@ -33,6 +20,7 @@ This README is written as a **setup + operations playbook** so any agent can det
 - [Proof / smoke / eval commands](#proof--smoke--eval-commands)
 - [Troubleshooting](#troubleshooting)
 - [Repo contents (what is public)](#repo-contents-what-is-public)
+- [Pi skill (optional)](#pi-skill-optional)
 - [License](#license)
 
 ---
@@ -108,6 +96,10 @@ For `action: search`, the daemon compiles an **Evidence Packet** (local facts + 
 ---
 
 ## Prerequisites
+
+### Platform
+
+This project is maintained for **Ubuntu Linux** (and similar distros with **systemd user session** support). Shell installers and the daemon service unit assume POSIX paths and LF line endings; Windows and macOS are not supported targets here.
 
 ### Required
 
@@ -186,6 +178,13 @@ OLLAMA_URL="http://localhost:11434"
 OLLAMA_MODEL="hermes3:8b"
 ```
 
+### Clean boot (systemd helper env)
+
+The installed user unit runs `scripts/wait-for-ollama.sh` before the daemon so Ollama is usually up before Bun starts (avoids “gave up after retries” when Ollama is slow).
+
+- **`GZMO_SYSTEMD_WAIT_FOR_OLLAMA`**: set to `0` / `false` / `off` to **skip** that wait (useful if you never run Ollama on this machine).
+- **`GZMO_OLLAMA_WAIT_MAX_SEC`**: max wait in seconds (default: `180`).
+
 ### Core runtime knobs
 
 - **`OLLAMA_URL`**: base URL for Ollama (default: `http://localhost:11434`)
@@ -244,11 +243,27 @@ bun run summon
 
 ## Run (systemd user service)
 
-This repo includes a portable systemd **user** service template:
+This repo includes an **Ubuntu-oriented** systemd **user** service template (POSIX paths, LF scripts, `systemctl --user`):
 - Template: `gzmo-daemon/gzmo-daemon.service.template`
 - Installer: `./install_service.sh` (writes the concrete unit file under your user config)
+- **Boot ordering**: the unit waits for `network-online.target`, then runs `scripts/wait-for-ollama.sh` (see `GZMO_SYSTEMD_WAIT_FOR_OLLAMA` in `.env`) before `bun run index.ts`.
 
-Install + start:
+**Recommended machine boot**: enable Ollama as a system service, then the daemon as a user service:
+
+```bash
+sudo systemctl enable --now ollama
+./install_service.sh
+systemctl --user daemon-reload
+systemctl --user enable --now gzmo-daemon
+```
+
+**One-shot manual start** (starts `ollama.service` if present, waits for the API, then starts or restarts `gzmo-daemon`):
+
+```bash
+./scripts/boot-stack.sh
+```
+
+Install + start (daemon only — same as before if Ollama is already running):
 
 ```bash
 ./install_service.sh
@@ -442,16 +457,29 @@ bun run doctor
 
 If your vault permissions are wrong, or `VAULT_PATH` is incorrect, the doctor output is usually the fastest way to pinpoint it.
 
+### `install_service.sh` or shell scripts fail on Linux
+
+- **`env: bash\r` / bad interpreter**: the script has **CRLF** line endings. Fix with `sed -i 's/\r$//' install_service.sh scripts/*.sh gzmo-daemon/deploy_to_stick.sh` (or rely on [`.gitattributes`](.gitattributes) after a fresh clone).
+
+### User service exits with `216/GROUP`
+
+- A **user** unit must **not** set `User=%u`. Re-run `./install_service.sh` from this repo so the generated unit matches the template.
+
+### `ExecStartPre` wait for Ollama times out
+
+- Ensure Ollama is running and reachable at `OLLAMA_URL`, or increase **`GZMO_OLLAMA_WAIT_MAX_SEC`** in `gzmo-daemon/.env`, or set **`GZMO_SYSTEMD_WAIT_FOR_OLLAMA=0`** to skip the pre-start wait (daemon will still retry internally).
+
 ---
 
 ## Repo contents (what is public)
 
-This public repo intentionally contains **only executable code + minimal packaging**:
+`gzmo-daemon/`, `scripts/`, `install_service.sh`, `README.md`, `AGENTS.md`, `LICENSE`, `.gitignore`, [`.gitattributes`](.gitattributes), [`.editorconfig`](.editorconfig), [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md) (optional Pi/shell inbox helpers). Vault data stays local and is not in git.
 
-- `gzmo-daemon/` (Bun/TS daemon)
-- `README.md`, `LICENSE`, `.gitignore`, `install_service.sh`
+---
 
-Your vault contents are **local-only** and not part of the repository.
+## Pi skill (optional)
+
+Shell scripts that write and watch **inbox** Markdown live in [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md). Install into `~/.pi/skills/gzmo-daemon` and set **`GZMO_ENV_FILE`** to the absolute path of `gzmo-daemon/.env` — step-by-step: **[AGENTS.md — Pi skill (optional)](AGENTS.md#pi-skill-optional)**.
 
 ---
 

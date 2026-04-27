@@ -9,8 +9,9 @@
  * - Task routing via action: frontmatter (think/search/chain)
  * - Autonomous dream distillation
  *
- * Usage:
- *   OLLAMA_MODEL=qwen2.5:3b VAULT_PATH=~/Vault bun run index.ts
+ * Usage (foreground):
+ *   OLLAMA_MODEL=hermes3:8b VAULT_PATH=/abs/path/to/vault bun run index.ts
+ * Production (Ubuntu): see repo README — systemd user unit + scripts/wait-for-ollama.sh.
  */
 
 import { resolve, join, relative, basename } from "path";

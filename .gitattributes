@@ -1,0 +1,13 @@
+# Linux/Ubuntu-oriented: keep text files as LF in the repo and on checkout.
+* text=auto eol=lf
+
+# Binary (explicit; extend if you add assets)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
