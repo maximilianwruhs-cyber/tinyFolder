@@ -63,6 +63,9 @@ vault/GZMO/vnext_comparison_report.md
 gzmo/doctor-report.*
 gzmo-daemon/doctor-report.*
 
+# local temp vaults (tests / smoke)
+.tmp_*/
+
 # repo meta kept local (optional)
 .github/
 CONTRIBUTING.md

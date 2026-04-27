@@ -80,6 +80,61 @@ Expected success signal:
 
 ---
 
+## Fresh machine agentic bootstrap (recommended)
+
+If you want this to be **repeatable** on a brand-new Ubuntu box (or a wiped dev VM), use the idempotent bootstrap script.
+
+Prereqs you still must install yourself:
+
+- **Bun**
+- **Ollama** (+ pull `hermes3:8b` and `nomic-embed-text` if you use embeddings)
+
+Bootstrap (vault scaffold + `.env` + bun deps):
+
+```bash
+VAULT="/absolute/path/to/your/vault"
+./scripts/agentic-setup.sh --vault "$VAULT" --force-env
+```
+
+Optional: also generate the **systemd user unit**:
+
+```bash
+./scripts/agentic-setup.sh --vault "$VAULT" --with-systemd
+systemctl --user daemon-reload
+systemctl --user enable --now gzmo-daemon
+```
+
+Optional: also install the **Pi skill pack**:
+
+```bash
+./scripts/agentic-setup.sh --vault "$VAULT" --with-pi
+export GZMO_ENV_FILE="$(pwd)/gzmo-daemon/.env"
+```
+
+---
+
+## Doctor (agentic readiness)
+
+For a single “OK / fix-this” report (and safe auto-fixes like creating missing vault directories), run:
+
+```bash
+export GZMO_ENV_FILE="$(pwd)/gzmo-daemon/.env"   # recommended
+./scripts/doctor-agentic.sh
+```
+
+Deep mode (slower, more checks):
+
+```bash
+./scripts/doctor-agentic.sh --deep
+```
+
+Notes:
+
+- This wrapper delegates to the daemon’s deeper doctor (`cd gzmo-daemon && bun run doctor …`) after doing fast system checks.
+- `--write` is supported but **not recommended** unless you intentionally want write-enabled checks.
+
+---
+
 ## Mental model
 
 ### Core contract (deterministic)
