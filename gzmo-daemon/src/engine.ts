@@ -27,6 +27,7 @@ import { gatherVaultStateIndex } from "./vault_state_index";
 import { compileEvidencePacket, renderEvidencePacket, type EvidencePacket } from "./evidence_packet";
 import { formatSearchCitations } from "./citation_formatter";
 import { verifySafety } from "./verifier_safety";
+import { enforceExactBulletCount, shapePreservingFailClosed } from "./response_shape";
 import { appendTaskPerf } from "./perf";
 import { OUTPUTS_REGISTRY } from "./outputs_registry";
 
@@ -86,6 +87,7 @@ function buildSystemPrompt(
   snap?: ChaosSnapshot,
   vaultContext?: string,
   memoryContext?: string,
+  projectGrounding?: string,
 ): string {
   let prompt = [
     "You are GZMO, a sovereign local AI daemon running on this machine.",
@@ -124,12 +126,40 @@ function buildSystemPrompt(
     ].join("\n");
   }
 
+  // Inject deterministic project grounding (for think/chain tasks that ask about this system).
+  if (projectGrounding) {
+    prompt += [
+      "",
+      "Project grounding (deterministic):",
+      projectGrounding.trim(),
+    ].join("\n");
+  }
+
   // Inject episodic memory (~100 tokens)
   if (memoryContext) {
     prompt += memoryContext;
   }
 
   return prompt;
+}
+
+function shouldInjectProjectGrounding(action: TaskAction, body: string): boolean {
+  if (action === "search") return false; // search uses Evidence Packet instead
+  const q = String(body ?? "").toLowerCase();
+  return (
+    q.includes("this project") ||
+    q.includes("this system") ||
+    q.includes("in this vault") ||
+    q.includes("knowledge base") ||
+    q.includes("ingest") ||
+    q.includes("raw") ||
+    q.includes("wiki") ||
+    q.includes("embeddings") ||
+    q.includes("rag") ||
+    q.includes("eval") ||
+    q.includes("telemetry") ||
+    q.includes("health")
+  );
 }
 
 function readBoolEnv(name: string, defaultValue: boolean): boolean {
@@ -396,7 +426,16 @@ export async function processTask(
 
     // 4. Build system prompt with context (now chaos-modulated)
     const memoryContext = memory?.toPromptContext();
-    const systemPrompt = buildSystemPrompt(snap, vaultContext, memoryContext);
+    // Deterministic project grounding for think/chain tasks that ask about this system.
+    let projectGrounding = "";
+    if (shouldInjectProjectGrounding(action, body)) {
+      const vaultRoot = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? resolve(filePath, "../../..");
+      projectGrounding = await gatherVaultStateIndex({ vaultPath: vaultRoot, query: body }).catch(() => "");
+      // Also include local facts for ops-like questions even in think/chain mode.
+      projectGrounding += "\n" + (await gatherLocalFacts({ vaultPath: vaultRoot, query: body }).catch(() => ""));
+      projectGrounding = projectGrounding.trim();
+    }
+    const systemPrompt = buildSystemPrompt(snap, vaultContext, memoryContext, projectGrounding);
 
     // 5. Run inference — temperature + prompt modulation
     // For certain ops-style PROOF tasks we can answer deterministically (no LLM call).
@@ -472,13 +511,15 @@ export async function processTask(
     if (!usedDeterministic && action === "search" && evidencePacket && readBoolEnv("GZMO_VERIFY_SAFETY", true)) {
       const verdict = spanSync("safety.verify", () => verifySafety({ answer: fullText, packet: evidencePacket }));
       if (verdict) {
-        fullText = [
-          "insufficient evidence to answer safely.",
-          "",
-          `Reason: ${verdict}`,
-          "",
-          "Next deterministic check: inspect the paths/snippets shown in the Evidence Packet.",
-        ].join("\n");
+        fullText = shapePreservingFailClosed({
+          userPrompt: body,
+          packet: evidencePacket,
+          lead: "insufficient evidence to answer safely.",
+          detailLines: [
+            `Reason: ${verdict}`,
+            "Next deterministic check: inspect the paths/snippets shown in the Evidence Packet.",
+          ],
+        });
       }
     }
 
@@ -487,6 +528,14 @@ export async function processTask(
     if (!usedDeterministic && action === "search" && evidencePacket) {
       const res = spanSync("citations.format", () => formatSearchCitations(fullText, evidencePacket));
       if (res.changed) fullText = res.formatted;
+    }
+
+    // Enforce exact bullet count when the prompt demands it (search answers).
+    // This prevents “almost correct” outputs that violate strict structure constraints.
+    if (!usedDeterministic && action === "search" && evidencePacket) {
+      fullText = spanSync("shape.enforce", () => enforceExactBulletCount({ userPrompt: body, packet: evidencePacket, answer: fullText }));
+      const res2 = spanSync("citations.format.postshape", () => formatSearchCitations(fullText, evidencePacket));
+      if (res2.changed) fullText = res2.formatted;
     }
 
     // Proof contract: action:search answers must contain at least one [E#] citation.
@@ -499,19 +548,17 @@ export async function processTask(
           evidencePacket.allowedPaths && evidencePacket.allowedPaths.length
             ? evidencePacket.allowedPaths.slice(0, 3).map((p) => `- \`${p}\``).join("\n")
             : "- *(no file paths present in evidence)*";
-        fullText = [
-          "insufficient evidence in the provided Evidence Packet to answer confidently.",
-          "",
-          `Closest deterministic context: [${cite}].`,
-          "",
-          "Next deterministic check:",
-          "1) Read the top Evidence Packet snippets and open the most relevant referenced files.",
-          "2) If the question is about vault routing/contracts, explicitly inspect `wiki/overview.md` and `wiki/00_MASTER_INDEX.md`.",
-          "3) If the question is about daemon implementation details, you must provide code-as-evidence (or mirror the daemon source into the vault) before answering in `action: search` mode.",
-          "",
-          "Evidence-referenced paths (sample):",
-          hintPaths,
-        ].join("\n");
+        fullText = shapePreservingFailClosed({
+          userPrompt: body,
+          packet: evidencePacket,
+          lead: "insufficient evidence in the provided Evidence Packet to answer confidently.",
+          detailLines: [
+            `Closest deterministic context: [${cite}].`,
+            "Next deterministic check: read the top Evidence Packet snippets and open the most relevant referenced files.",
+            "If the question is about vault routing/contracts, inspect `wiki/overview.md` and `wiki/00_MASTER_INDEX.md`.",
+            `Evidence-referenced paths (sample): ${hintPaths.replace(/\n+/g, " ").trim()}`,
+          ],
+        });
       }
     }
 
