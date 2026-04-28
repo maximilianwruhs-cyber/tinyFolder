@@ -18,18 +18,19 @@ import type { ChaosSnapshot } from "./types";
 import { Phase } from "./types";
 import type { PulseLoop } from "./pulse";
 import type { EmbeddingStore } from "./embeddings";
-import { searchVaultHybrid } from "./search";
+import { searchVaultHybrid, type SearchResult } from "./search";
 import { TaskMemory } from "./memory";
 import { safeWriteText } from "./vault_fs";
 import { gatherLocalFacts } from "./local_facts";
 import { selfEvalAndRewrite } from "./self_eval";
 import { gatherVaultStateIndex } from "./vault_state_index";
-import { compileEvidencePacket, renderEvidencePacket, type EvidencePacket } from "./evidence_packet";
+import { compileEvidencePacket, compileEvidencePacketMulti, renderEvidencePacket, renderEvidencePacketMulti, type EvidencePacket, type EvidencePacketMulti } from "./evidence_packet";
 import { formatSearchCitations } from "./citation_formatter";
 import { verifySafety } from "./verifier_safety";
-import { enforceExactBulletCount, enforceOneSentencePerBullet, enforceRequiredPartsCoverage, shapePreservingFailClosed } from "./response_shape";
+import { detectRequiredParts, enforceExactBulletCount, enforceOneSentencePerBullet, enforceRequiredPartsCoverage, shapePreservingFailClosed } from "./response_shape";
 import { buildProjectGrounding } from "./project_grounding";
 import { checkChainChecklist, enforceChainChecklist } from "./chain_enforce";
+import { enforcePerPartCitations } from "./part_citations";
 import { appendTaskPerf } from "./perf";
 import { OUTPUTS_REGISTRY } from "./outputs_registry";
 
@@ -308,6 +309,7 @@ export async function processTask(
     // 2. Build context based on action
     let vaultContext: string | undefined;
     let evidencePacket: EvidencePacket | undefined;
+    let evidenceMulti: EvidencePacketMulti | undefined;
     let deterministicAnswer: string | null = null;
 
     if (action === "search" && embeddingStore) {
@@ -320,6 +322,31 @@ export async function processTask(
           gatherVaultStateIndex({ vaultPath: vaultRoot, query: body }).catch(() => ""),
         ]);
       });
+
+      // Detect numbered multi-part prompts like:
+      // 1) ...
+      // 2) ...
+      // This is used to run per-part retrieval + per-part grounding later in the pipeline.
+      const requiredParts = detectRequiredParts(body);
+      const preludeLines: string[] = [];
+      if (requiredParts.kind === "numbered_parts") {
+        const lines = body.split("\n");
+        for (const line of lines) {
+          if (/^\s*\d+\)\s+/.test(line)) break;
+          const t = line.trim();
+          if (t) preludeLines.push(t);
+          if (preludeLines.length >= 2) break;
+        }
+      }
+      const globalPromptContext = preludeLines.join("\n").trim();
+      const partQueries =
+        requiredParts.kind === "numbered_parts"
+          ? requiredParts.parts.map((p) => ({
+              idx: p.idx,
+              text: p.text,
+              query: [globalPromptContext, `Part ${p.idx}: ${p.text}`].filter(Boolean).join("\n\n"),
+            }))
+          : [];
 
       // If the user explicitly references specific vault markdown files, include their contents
       // deterministically as part of local facts (bounded). This prevents “wrong chunk” failures
@@ -365,6 +392,46 @@ export async function processTask(
       }
 
       const enableEvidence = readBoolEnv("GZMO_EVIDENCE_PACKET", true);
+
+      // Per-part retrieval (multi-part prompts): retrieve evidence separately for each numbered part.
+      // This improves grounding when the overall query is broad but sub-questions are specific.
+      let perPart: { idx: number; text: string; query: string; results: SearchResult[] }[] = [];
+      if (partQueries.length > 0 && readBoolEnv("GZMO_ENABLE_PER_PART_EVIDENCE", true)) {
+        const topKPart = readIntEnv("GZMO_TOPK_PART", 4, 1, 12);
+        const perPartRaw = await span("retrieval.parts", async () => {
+          const out: { idx: number; text: string; query: string; results: SearchResult[] }[] = [];
+          for (const pq of partQueries) {
+            const fast = await searchVaultHybrid(pq.query, embeddingStore, OLLAMA_API_URL, { topK: topKPart, perFileLimit: 1, mode: "fast" });
+            const fastScore = fast[0]?.score ?? 0;
+            const minFastScore = Number.parseFloat(process.env.GZMO_FASTPATH_MIN_SCORE ?? "0.55");
+            const shouldDeep = Number.isFinite(minFastScore) ? fastScore < minFastScore : false;
+            const raw = shouldDeep
+              ? await searchVaultHybrid(pq.query, embeddingStore, OLLAMA_API_URL, { topK: topKPart, perFileLimit: 1, mode: "deep" })
+              : fast;
+            const filtered = raw.filter((r) =>
+              r.file !== taskRel
+              && !r.file.startsWith("GZMO/Inbox/")
+              && (allowDocs || !r.file.startsWith("docs/"))
+            );
+            out.push({ idx: pq.idx, text: pq.text, query: pq.query, results: filtered });
+          }
+          return out;
+        });
+
+        // Deterministic dedup within each part (same chunk can appear via hybrid rewrites).
+        perPart = perPartRaw.map((p) => {
+          const seen = new Set<string>();
+          const deduped: SearchResult[] = [];
+          for (const r of p.results) {
+            const key = `${r.file}::${r.heading}::${r.text}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            deduped.push(r);
+          }
+          return { ...p, results: deduped };
+        });
+      }
+
       evidencePacket = spanSync("evidence.compile", () => compileEvidencePacket({
           localFacts: [localFacts, vaultIndex, explicitFacts].filter(Boolean).join("\n"),
           results,
@@ -375,16 +442,49 @@ export async function processTask(
       // Hard relevance thresholding (fail-closed).
       // If retrieval couldn't find anything credible, do not pretend.
       const minScore = Number.parseFloat(process.env.GZMO_MIN_RETRIEVAL_SCORE ?? "0.32");
-      if (results.length === 0 || !(Number.isFinite(minScore) ? results[0]!.score >= minScore : true)) {
-        evidencePacket = spanSync("evidence.compile.failclosed", () => compileEvidencePacket({
-          localFacts: [localFacts, vaultIndex].filter(Boolean).join("\n"),
-          results: [],
-          maxSnippets: readIntEnv("GZMO_EVIDENCE_MAX_SNIPPETS", 10, 1, 20),
+      const bestPartTop = perPart.length > 0
+        ? Math.max(0, ...perPart.map((p) => p.results[0]?.score ?? 0))
+        : 0;
+      const bestTop = Math.max(results[0]?.score ?? 0, bestPartTop);
+
+      const wantMulti = perPart.length > 0;
+      if (wantMulti) {
+        evidenceMulti = spanSync("evidence.compile.multi", () => compileEvidencePacketMulti({
+          localFacts: [localFacts, vaultIndex, explicitFacts].filter(Boolean).join("\n"),
+          globalResults: results,
+          parts: perPart.map((p) => ({ idx: p.idx, text: p.text, results: p.results })),
+          maxSnippets: readIntEnv("GZMO_EVIDENCE_MAX_SNIPPETS", 12, 1, 30),
           maxSnippetChars: readIntEnv("GZMO_EVIDENCE_MAX_CHARS", 900, 200, 4000),
+          maxGlobalSnippets: readIntEnv("GZMO_EVIDENCE_GLOBAL_MAX", 4, 0, 12),
+          maxSnippetsPerPart: readIntEnv("GZMO_EVIDENCE_PER_PART_MAX", 3, 0, 8),
         }));
+        evidencePacket = evidenceMulti.packet;
       }
+
+      if ((results.length === 0 && perPart.every((p) => p.results.length === 0)) || !(Number.isFinite(minScore) ? bestTop >= minScore : true)) {
+        if (wantMulti) {
+          evidenceMulti = spanSync("evidence.compile.multi.failclosed", () => compileEvidencePacketMulti({
+            localFacts: [localFacts, vaultIndex].filter(Boolean).join("\n"),
+            globalResults: [],
+            parts: perPart.map((p) => ({ idx: p.idx, text: p.text, results: [] })),
+            maxSnippets: readIntEnv("GZMO_EVIDENCE_MAX_SNIPPETS", 12, 1, 30),
+            maxSnippetChars: readIntEnv("GZMO_EVIDENCE_MAX_CHARS", 900, 200, 4000),
+            maxGlobalSnippets: readIntEnv("GZMO_EVIDENCE_GLOBAL_MAX", 4, 0, 12),
+            maxSnippetsPerPart: readIntEnv("GZMO_EVIDENCE_PER_PART_MAX", 3, 0, 8),
+          }));
+          evidencePacket = evidenceMulti.packet;
+        } else {
+          evidencePacket = spanSync("evidence.compile.failclosed", () => compileEvidencePacket({
+            localFacts: [localFacts, vaultIndex].filter(Boolean).join("\n"),
+            results: [],
+            maxSnippets: readIntEnv("GZMO_EVIDENCE_MAX_SNIPPETS", 10, 1, 20),
+            maxSnippetChars: readIntEnv("GZMO_EVIDENCE_MAX_CHARS", 900, 200, 4000),
+          }));
+        }
+      }
+
       vaultContext = enableEvidence
-        ? spanSync("evidence.render", () => renderEvidencePacket(evidencePacket!))
+        ? spanSync("evidence.render", () => evidenceMulti ? renderEvidencePacketMulti(evidenceMulti) : renderEvidencePacket(evidencePacket!))
         : [localFacts, vaultIndex].filter(Boolean).join("\n");
 
       // Smarter-than-RAG deterministic handlers (PROOF-only):
@@ -602,6 +702,16 @@ export async function processTask(
 
       const res3 = spanSync("citations.format.postparts", () => formatSearchCitations(fullText, evidencePacket));
       if (res3.changed) fullText = res3.formatted;
+
+      // If we built a per-part evidence map, enforce that bullet i cites part i evidence.
+      if (evidenceMulti && evidenceMulti.parts.length > 0) {
+        const res4 = spanSync("citations.enforce.perpart", () => enforcePerPartCitations({
+          answer: fullText,
+          packet: evidencePacket,
+          parts: evidenceMulti.parts,
+        }));
+        if (res4.changed) fullText = res4.out;
+      }
     }
 
     // Think/chain structure enforcement (small-LLM leverage):
