@@ -166,7 +166,17 @@ fi
 
 model="${OLLAMA_MODEL:-hermes3:8b}"
 if have ollama; then
-  have_model() { ollama list 2>/dev/null | awk '{print $1}' | grep -Fxq "$1"; }
+  have_model() {
+    local want="$1"
+    local names
+    names="$(ollama list 2>/dev/null | awk '{print $1}')"
+    if [[ "$want" == *:* ]]; then
+      echo "$names" | grep -Fxq "$want"
+      return $?
+    fi
+    # Ollama prints tags (e.g. nomic-embed-text:latest). Accept any tag if the caller omits it.
+    echo "$names" | grep -Eq "^${want}(:.+)?$"
+  }
   if have_model "$model"; then
     say "PASS: model present: $model"
   else
