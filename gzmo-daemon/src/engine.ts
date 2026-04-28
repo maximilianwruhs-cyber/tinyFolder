@@ -27,8 +27,9 @@ import { gatherVaultStateIndex } from "./vault_state_index";
 import { compileEvidencePacket, renderEvidencePacket, type EvidencePacket } from "./evidence_packet";
 import { formatSearchCitations } from "./citation_formatter";
 import { verifySafety } from "./verifier_safety";
-import { enforceExactBulletCount, shapePreservingFailClosed } from "./response_shape";
+import { enforceExactBulletCount, enforceOneSentencePerBullet, enforceRequiredPartsCoverage, shapePreservingFailClosed } from "./response_shape";
 import { buildProjectGrounding } from "./project_grounding";
+import { checkChainChecklist, enforceChainChecklist } from "./chain_enforce";
 import { appendTaskPerf } from "./perf";
 import { OUTPUTS_REGISTRY } from "./outputs_registry";
 
@@ -566,6 +567,89 @@ export async function processTask(
       fullText = spanSync("shape.enforce", () => enforceExactBulletCount({ userPrompt: body, packet: evidencePacket, answer: fullText }));
       const res2 = spanSync("citations.format.postshape", () => formatSearchCitations(fullText, evidencePacket));
       if (res2.changed) fullText = res2.formatted;
+    }
+
+    // Enforce multi-part coverage for numbered prompts like "1) ... 2) ... 3) ..."
+    // If parts are missing, trigger a rewrite pass (LLM) using the same evidence context, then enforce again.
+    if (!usedDeterministic && action === "search" && evidencePacket) {
+      const cov0 = spanSync("shape.parts.check", () => enforceRequiredPartsCoverage({ userPrompt: body, packet: evidencePacket, answer: fullText }));
+      if (cov0.applied && cov0.missing > 0 && readBoolEnv("GZMO_ENABLE_SELF_EVAL", true)) {
+        try {
+          const { rewritten } = await span("self_eval.rewrite.parts", () => selfEvalAndRewrite({
+            model: ollama(OLLAMA_MODEL),
+            userPrompt: [
+              body.trim(),
+              "",
+              "Rewrite requirement:",
+              "- Answer ALL numbered parts (1), (2), (3), ... in order.",
+              "- Use exactly one bullet line per numbered part.",
+              "- Every bullet line must include at least one [E#] citation.",
+              "- If evidence is missing for a part, say 'insufficient evidence' for that part (still cite).",
+            ].join("\n"),
+            answer: fullText,
+            context: vaultContext,
+            maxTokens: 320,
+          }));
+          if (rewritten && rewritten.length >= 20) fullText = rewritten;
+        } catch {
+          // non-fatal
+        }
+      }
+
+      // Final deterministic enforcement: only if still missing after rewrite.
+      const cov1 = spanSync("shape.parts.enforce", () => enforceRequiredPartsCoverage({ userPrompt: body, packet: evidencePacket, answer: fullText }));
+      if (cov1.applied) fullText = cov1.out;
+
+      const res3 = spanSync("citations.format.postparts", () => formatSearchCitations(fullText, evidencePacket));
+      if (res3.changed) fullText = res3.formatted;
+    }
+
+    // Think/chain structure enforcement (small-LLM leverage):
+    // If the prompt asks for "exactly N bullet points", enforce N bullets and one sentence per bullet.
+    if (!usedDeterministic && (action === "think" || action === "chain")) {
+      const shaped = spanSync("shape.nonsearch.enforce", () => enforceExactBulletCount({ userPrompt: body, packet: undefined, answer: fullText }));
+      fullText = spanSync("shape.nonsearch.onesentence", () => enforceOneSentencePerBullet(shaped));
+    }
+
+    // Chain checklist enforcement: normalize checklist count + enforce required contract anchors when present in prompt.
+    if (!usedDeterministic && action === "chain") {
+      const pre = spanSync("shape.chain.check", () => checkChainChecklist({ userPrompt: body, answer: fullText }));
+      if (pre.violations.length > 0 && readBoolEnv("GZMO_ENABLE_SELF_EVAL", true)) {
+        try {
+          const { rewritten } = await span("self_eval.rewrite.chain", () => selfEvalAndRewrite({
+            model: ollama(OLLAMA_MODEL),
+            userPrompt: [
+              body.trim(),
+              "",
+              "Rewrite requirement:",
+              "- Output ONLY the checklist.",
+              "- Satisfy exactly the requested checklist count and anchor mentions.",
+              "- Do not invent filenames beyond the explicitly required anchors.",
+            ].join("\n"),
+            answer: fullText,
+            context: projectGrounding || undefined,
+            maxTokens: 220,
+          }));
+          if (rewritten && rewritten.length >= 20) fullText = rewritten;
+        } catch {
+          // non-fatal
+        }
+      }
+      const res = spanSync("shape.chain.enforce", () => enforceChainChecklist({ userPrompt: body, answer: fullText }));
+      if (res.changed) fullText = res.out;
+
+      // Final fail-closed: if constraints still violated, surface it deterministically.
+      const post = spanSync("shape.chain.check.post", () => checkChainChecklist({ userPrompt: body, answer: fullText }));
+      if (post.violations.length > 0) {
+        fullText = [
+          fullText.trim(),
+          "",
+          "---",
+          "",
+          "insufficient evidence to satisfy the chain contract constraints.",
+          `Violations: ${post.violations.join(", ")}`,
+        ].join("\n");
+      }
     }
 
     // Proof contract: action:search answers must contain at least one [E#] citation.
