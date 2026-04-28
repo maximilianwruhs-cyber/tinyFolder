@@ -13,6 +13,7 @@ import { buildBm25Index, bm25SearchVault } from "./bm25";
 import { rerankWithLLM } from "./rerank_llm";
 import { rewriteQuery } from "./query_rewrite";
 import { buildAnchorIndex } from "./anchor_index";
+import { applyAdaptiveTopK } from "./adaptive_topk";
 
 // ── Core Search ────────────────────────────────────────────────────
 
@@ -50,6 +51,10 @@ export interface SearchOptions {
   filters?: SearchFilters;
   // vNext: search mode influences rewrite/rerank budgets.
   mode?: "fast" | "deep";
+  // Adaptive top-K behavior (optional).
+  // If omitted, falls back to env defaults.
+  adaptiveTopKMode?: "global" | "part";
+  adaptiveTopK?: boolean;
 }
 
 // BM25 index cache (store identity -> built index)
@@ -265,6 +270,7 @@ export async function searchVaultHybrid(
   const topK = opts.topK ?? 3;
   const perFileLimit = opts.perFileLimit ?? topK;
   const mode = opts.mode ?? "deep";
+  const adaptiveMode = opts.adaptiveTopKMode ?? "global";
 
   const baseV1 = (process.env.OLLAMA_URL ?? "http://localhost:11434/v1");
   const rewrites = mode === "fast"
@@ -341,6 +347,35 @@ export async function searchVaultHybrid(
     });
   }
   fused = forceIncludePaths(fused);
+
+  // Deterministic adaptive top-K (optional): drop noisy tail when scores "elbow".
+  // We apply it before final diversification. Explicit paths are re-injected afterwards.
+  const adaptiveOn = (() => {
+    if (typeof opts.adaptiveTopK === "boolean") return opts.adaptiveTopK;
+    const key = adaptiveMode === "part" ? "GZMO_ADAPTIVE_TOPK_PART" : "GZMO_ADAPTIVE_TOPK_GLOBAL";
+    const raw = (process.env[key] ?? process.env.GZMO_ADAPTIVE_TOPK ?? "").trim().toLowerCase();
+    return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+  })();
+  if (adaptiveOn) {
+    const sKey = adaptiveMode === "part" ? "GZMO_ADAPTIVE_TOPK_PART_SENS" : "GZMO_ADAPTIVE_TOPK_GLOBAL_SENS";
+    const minKey = adaptiveMode === "part" ? "GZMO_ADAPTIVE_TOPK_PART_MIN" : "GZMO_ADAPTIVE_TOPK_GLOBAL_MIN";
+    const maxKey = adaptiveMode === "part" ? "GZMO_ADAPTIVE_TOPK_PART_MAX" : "GZMO_ADAPTIVE_TOPK_GLOBAL_MAX";
+    const sensitivity = Number.parseFloat(process.env[sKey] ?? process.env.GZMO_ADAPTIVE_TOPK_SENS ?? "1.5");
+    const minResults = Number.parseInt(process.env[minKey] ?? process.env.GZMO_ADAPTIVE_TOPK_MIN ?? "2", 10);
+    const maxResults = Number.parseInt(process.env[maxKey] ?? process.env.GZMO_ADAPTIVE_TOPK_MAX ?? "18", 10);
+    const sens = Number.isFinite(sensitivity) ? sensitivity : 1.5;
+    const minR = Number.isFinite(minResults) ? Math.max(1, Math.min(12, minResults)) : 2;
+    const maxR = Number.isFinite(maxResults) ? Math.max(minR, Math.min(50, maxResults)) : 18;
+
+    const byScore = [...fused].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    const cut = applyAdaptiveTopK(byScore.map((r) => ({ item: r, score: r.score ?? 0 })), {
+      sensitivity: sens,
+      minResults: minR,
+      maxResults: maxR,
+    }).map((x) => x.item);
+
+    fused = forceIncludePaths(cut);
+  }
 
   // Diversify by file path.
   const out: SearchResult[] = [];

@@ -15,6 +15,13 @@ export interface TaskPerfEvent {
   ok: boolean;
   total_ms: number;
   spans: PerfSpan[];
+  // Optional RouteJudge metrics (when enabled).
+  route_judge?: {
+    score: number;
+    partValidCitationRate: number;
+    partBackticksComplianceRate: number;
+    partAdversarialRejectRate: number;
+  };
 }
 
 export async function appendTaskPerf(vaultPath: string, ev: TaskPerfEvent): Promise<void> {
