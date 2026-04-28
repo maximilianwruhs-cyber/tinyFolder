@@ -30,9 +30,14 @@ import { appendTaskPerf } from "./perf";
 import { OUTPUTS_REGISTRY } from "./outputs_registry";
 
 // ── Configuration ──────────────────────────────────────────
-const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
+function normalizeOllamaV1BaseUrl(raw: string | undefined): string {
+  const base0 = (raw ?? "http://localhost:11434/v1").replace(/\/$/, "");
+  return base0.endsWith("/v1") ? base0 : `${base0}/v1`;
+}
+
+const OLLAMA_BASE_URL = normalizeOllamaV1BaseUrl(process.env.OLLAMA_URL);
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "hermes3:8b";
-const OLLAMA_API_URL = process.env.OLLAMA_URL?.replace("/v1", "") ?? "http://localhost:11434";
+const OLLAMA_API_URL = normalizeOllamaV1BaseUrl(process.env.OLLAMA_URL).replace(/\/v1$/, "");
 
 // ── Provider Setup ─────────────────────────────────────────
 const ollama = createOpenAICompatible({
