@@ -163,16 +163,6 @@ function shouldInjectProjectGrounding(action: TaskAction, body: string): boolean
   );
 }
 
-function deterministicIngestChecklist(vaultRoot: string): string {
-  const v = vaultRoot.replace(/\\/g, "/");
-  return [
-    "- [ ] Place the new source as a Markdown file under `raw/` (absolute: `" + `${v}/raw/` + "`).",
-    "- [ ] Wait for the ingest cycle to summarize it into `wiki/sources/` (absolute: `" + `${v}/wiki/sources/` + "`).",
-    "- [ ] Confirm the wiki bookkeeping updates `wiki/log.md` and `wiki/index.md` (absolute: `" + `${v}/wiki/log.md` + "`, `" + `${v}/wiki/index.md` + "`).",
-    "- [ ] Ensure it becomes searchable by verifying `GZMO/embeddings.json` updates (absolute: `" + `${v}/GZMO/embeddings.json` + "`).",
-  ].join("\n");
-}
-
 function readBoolEnv(name: string, defaultValue: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined) return defaultValue;
@@ -437,8 +427,19 @@ export async function processTask(
         /\bsearchable\b/i.test(body);
       const wantsFour = /\bexactly\s*4\b/i.test(body) || /\b4\s+checklist\b/i.test(body);
       if (wantsChecklist && wantsFour) {
-        const vaultRoot = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? resolve(filePath, "../../..");
-        deterministicAnswer = deterministicIngestChecklist(vaultRoot);
+        // Intentionally no deterministic answers for normal tasks (no cheating).
+      }
+    }
+
+    // Deterministic handler: "self-developing knowledge base" definition for THIS project.
+    if (!deterministicAnswer && action === "think") {
+      const wantsDefinition =
+        /\bself[-\s]?developing\b/i.test(body) &&
+        /\bknowledge\s+base\b/i.test(body) &&
+        /\bexactly\s*5\b/i.test(body) &&
+        /\bbullet\b/i.test(body);
+      if (wantsDefinition) {
+        // Intentionally no deterministic answers for normal tasks (no cheating).
       }
     }
 
