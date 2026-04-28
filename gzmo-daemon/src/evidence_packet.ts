@@ -21,6 +21,24 @@ function clampText(s: string, maxChars: number): string {
   return t.slice(0, maxChars).trimEnd() + "\n…";
 }
 
+function extractBacktickedPaths(s: string): string[] {
+  const out: string[] = [];
+  const text = String(s ?? "");
+  // Conservative: only allow paths that look like absolute or vault-relative file paths.
+  const re = /`([^`\n]{2,240})`/g;
+  for (const m of text.matchAll(re)) {
+    const raw = String(m[1] ?? "").trim();
+    if (!raw) continue;
+    if (raw.includes("\t")) continue;
+    // Skip things that are clearly not paths.
+    if (raw.includes(" ")) continue;
+    if (raw.includes("://")) continue;
+    if (!(raw.includes("/") || raw.includes("\\"))) continue;
+    out.push(raw.replace(/\\/g, "/"));
+  }
+  return [...new Set(out)];
+}
+
 export function compileEvidencePacket(params: {
   localFacts?: string;
   results?: SearchResult[];
@@ -34,6 +52,9 @@ export function compileEvidencePacket(params: {
 
   const localFacts = (params.localFacts ?? "").trim();
   if (localFacts) {
+    // Allow paths that appear in deterministic local facts / vault index to pass the safety verifier.
+    // These are the most reliable sources for operational outputs like GZMO/TELEMETRY.json.
+    for (const p of extractBacktickedPaths(localFacts)) allowed.add(p);
     snippets.push({
       id: "E1",
       kind: "local_facts",

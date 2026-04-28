@@ -101,6 +101,19 @@ describe("max finesse pack", () => {
     expect(verdict).toContain("not present in evidence");
   });
 
+  test("safety verifier allows paths present in deterministic local facts", () => {
+    const packet = compileEvidencePacket({
+      localFacts: "Local Facts (deterministic)\n- telemetry: `/abs/vault/GZMO/TELEMETRY.json`",
+      results: [],
+      maxSnippets: 3,
+    });
+    const verdict = verifySafety({
+      answer: "It is written to `/abs/vault/GZMO/TELEMETRY.json` [E1]",
+      packet,
+    });
+    expect(verdict).toBe("");
+  });
+
   test("vault state index lists canonical output paths deterministically", async () => {
     const vault = mkdtempSync(join(tmpdir(), "gzmo-vault-state-"));
     try {

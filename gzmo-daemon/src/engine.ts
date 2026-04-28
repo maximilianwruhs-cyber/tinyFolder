@@ -25,6 +25,7 @@ import { gatherLocalFacts } from "./local_facts";
 import { selfEvalAndRewrite } from "./self_eval";
 import { gatherVaultStateIndex } from "./vault_state_index";
 import { compileEvidencePacket, renderEvidencePacket, type EvidencePacket } from "./evidence_packet";
+import { formatSearchCitations } from "./citation_formatter";
 import { verifySafety } from "./verifier_safety";
 import { appendTaskPerf } from "./perf";
 import { OUTPUTS_REGISTRY } from "./outputs_registry";
@@ -479,6 +480,13 @@ export async function processTask(
           "Next deterministic check: inspect the paths/snippets shown in the Evidence Packet.",
         ].join("\n");
       }
+    }
+
+    // Deterministic citation formatting: fix minor citation discipline issues
+    // (especially bullet/checklist/numbered item lines) before any fail-closed checks.
+    if (!usedDeterministic && action === "search" && evidencePacket) {
+      const res = spanSync("citations.format", () => formatSearchCitations(fullText, evidencePacket));
+      if (res.changed) fullText = res.formatted;
     }
 
     // Proof contract: action:search answers must contain at least one [E#] citation.
