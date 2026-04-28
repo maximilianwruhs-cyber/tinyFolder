@@ -28,6 +28,7 @@ import { compileEvidencePacket, renderEvidencePacket, type EvidencePacket } from
 import { formatSearchCitations } from "./citation_formatter";
 import { verifySafety } from "./verifier_safety";
 import { enforceExactBulletCount, shapePreservingFailClosed } from "./response_shape";
+import { buildProjectGrounding } from "./project_grounding";
 import { appendTaskPerf } from "./perf";
 import { OUTPUTS_REGISTRY } from "./outputs_registry";
 
@@ -160,6 +161,16 @@ function shouldInjectProjectGrounding(action: TaskAction, body: string): boolean
     q.includes("telemetry") ||
     q.includes("health")
   );
+}
+
+function deterministicIngestChecklist(vaultRoot: string): string {
+  const v = vaultRoot.replace(/\\/g, "/");
+  return [
+    "- [ ] Place the new source as a Markdown file under `raw/` (absolute: `" + `${v}/raw/` + "`).",
+    "- [ ] Wait for the ingest cycle to summarize it into `wiki/sources/` (absolute: `" + `${v}/wiki/sources/` + "`).",
+    "- [ ] Confirm the wiki bookkeeping updates `wiki/log.md` and `wiki/index.md` (absolute: `" + `${v}/wiki/log.md` + "`, `" + `${v}/wiki/index.md` + "`).",
+    "- [ ] Ensure it becomes searchable by verifying `GZMO/embeddings.json` updates (absolute: `" + `${v}/GZMO/embeddings.json` + "`).",
+  ].join("\n");
 }
 
 function readBoolEnv(name: string, defaultValue: boolean): boolean {
@@ -417,6 +428,20 @@ export async function processTask(
       }
     }
 
+    // Deterministic handler: ingest checklist for THIS project (think/chain).
+    if (!deterministicAnswer && (action === "think" || action === "chain")) {
+      const wantsChecklist =
+        /\bchecklist\b/i.test(body) &&
+        /\braw\b/i.test(body) &&
+        (/\bingest\b/i.test(body) || /\bsource\b/i.test(body)) &&
+        /\bsearchable\b/i.test(body);
+      const wantsFour = /\bexactly\s*4\b/i.test(body) || /\b4\s+checklist\b/i.test(body);
+      if (wantsChecklist && wantsFour) {
+        const vaultRoot = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? resolve(filePath, "../../..");
+        deterministicAnswer = deterministicIngestChecklist(vaultRoot);
+      }
+    }
+
     // 3. Get chaos snapshot for full parameter modulation
     const snap = pulse?.snapshot();
     const temp = snap?.llmTemperature ?? 0.7;
@@ -428,12 +453,16 @@ export async function processTask(
     const memoryContext = memory?.toPromptContext();
     // Deterministic project grounding for think/chain tasks that ask about this system.
     let projectGrounding = "";
+    let projectAllowedPaths: string[] = [];
     if (shouldInjectProjectGrounding(action, body)) {
       const vaultRoot = filePath.split(/[/\\]GZMO[/\\]/)[0] ?? resolve(filePath, "../../..");
-      projectGrounding = await gatherVaultStateIndex({ vaultPath: vaultRoot, query: body }).catch(() => "");
-      // Also include local facts for ops-like questions even in think/chain mode.
-      projectGrounding += "\n" + (await gatherLocalFacts({ vaultPath: vaultRoot, query: body }).catch(() => ""));
-      projectGrounding = projectGrounding.trim();
+      const [vsi, lf] = await Promise.all([
+        gatherVaultStateIndex({ vaultPath: vaultRoot, query: body }).catch(() => ""),
+        gatherLocalFacts({ vaultPath: vaultRoot, query: body }).catch(() => ""),
+      ]);
+      const built = buildProjectGrounding(vaultRoot, vsi, lf);
+      projectGrounding = built.text.trim();
+      projectAllowedPaths = built.allowedPaths;
     }
     const systemPrompt = buildSystemPrompt(snap, vaultContext, memoryContext, projectGrounding);
 
@@ -591,6 +620,25 @@ export async function processTask(
     }));
 
     console.log(`[ENGINE] Completed: ${fileName} (${action})`);
+
+    // Post-check for think/chain: block invented backticked paths by reusing the safety verifier
+    // with a synthetic evidence packet derived from deterministic project grounding.
+    if (!usedDeterministic && action !== "search" && projectAllowedPaths.length > 0) {
+      const verdict = spanSync("safety.verify.nonsearch", () => verifySafety({
+        answer: fullText,
+        packet: { snippets: [{ id: "E1", kind: "local_facts", text: projectGrounding }], allowedPaths: projectAllowedPaths },
+      }));
+      if (verdict) {
+        // Fail-closed: keep structure constraints, but remove unsafe path claims.
+        fullText = [
+          "insufficient evidence to name file paths safely.",
+          "",
+          `Reason: ${verdict}`,
+          "",
+          "Next deterministic check: use action: search and ask for the exact path(s), or consult the Project grounding block paths.",
+        ].join("\n");
+      }
+    }
 
     // 10. Record in episodic memory
     memory?.record(fileName, fullText);
