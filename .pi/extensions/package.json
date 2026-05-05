@@ -1,0 +1,10 @@
+{
+  "name": "tinyfolder-pi-extensions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Project-local Pi (badlogic/pi-mono) extensions for tinyFolder/GZMO.",
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "^0.73.0",
+    "typebox": "^1.1.37"
+  }
+}

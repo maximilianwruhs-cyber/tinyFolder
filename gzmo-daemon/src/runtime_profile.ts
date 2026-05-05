@@ -1,4 +1,4 @@
-export type GzmoProfileName = "heartbeat" | "minimal" | "standard" | "full";
+export type GzmoProfileName = "heartbeat" | "minimal" | "standard" | "core" | "full";
 
 export interface RuntimeProfile {
   name: GzmoProfileName;
@@ -83,6 +83,22 @@ export function defaultRuntimeProfile(name: GzmoProfileName): RuntimeProfile {
         enableWikiLint: false,
         enablePruning: true,
         enableDashboardPulse: true,
+      };
+
+    case "core":
+      return {
+        name,
+        enableInboxWatcher: true,
+        enableTaskProcessing: true,
+        enableEmbeddingsInitialSync: true,
+        enableEmbeddingsLiveSync: true,
+        enableDreams: false,
+        enableSelfAsk: false,
+        enableWiki: false,
+        enableIngest: false,
+        enableWikiLint: false,
+        enablePruning: false,
+        enableDashboardPulse: false,
       };
 
     case "full":

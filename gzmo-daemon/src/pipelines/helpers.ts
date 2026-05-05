@@ -9,26 +9,45 @@ export function parseAction(frontmatter: Record<string, unknown>): TaskAction {
   return "think";
 }
 
-export function phasePersona(phase: Phase): string {
+// ── Phase Contracts (structural output rules, not personas) ───────
+function phaseContract(phase: Phase): string {
   switch (phase) {
-    case Phase.Idle:  return "You are calm and reflective. Prioritize clarity and precision.";
-    case Phase.Build: return "You are alert and focused. Be thorough and structured.";
-    case Phase.Drop:  return "You are under pressure. Be decisive and direct. No hedging.";
+    case Phase.Idle:
+      return [
+        "- Format: exactly 1 paragraph, under 100 words.",
+        "- No citations required unless the task explicitly asks for evidence.",
+        "- Start with the core idea. No preamble or summary sentence.",
+      ].join("\n");
+    case Phase.Build:
+      return [
+        "- Format: bullet points, 3–7 items.",
+        "- Each non-trivial claim MUST cite evidence as [E#].",
+        "- If evidence is missing, write 'insufficient evidence' and stop; do not elaborate.",
+        "- No preamble. Start directly with the first bullet.",
+      ].join("\n");
+    case Phase.Drop:
+      return [
+        "- Format: a single declarative sentence (or 2 if grammatically unavoidable).",
+        "- State the conclusion first. No hedging words (maybe, perhaps, likely, possibly, seems).",
+        "- If the answer is uncertain, say 'I do not know' rather than hedging.",
+      ].join("\n");
   }
 }
 
-export function valenceDirective(valence: number): string {
-  if (valence < -0.5) return " Approach with caution — flag risks and uncertainties.";
-  if (valence < -0.15) return " Be measured and analytical.";
-  if (valence > 0.5) return " Be exploratory and confident — suggest bold connections.";
-  if (valence > 0.15) return " Be constructive and forward-looking.";
-  return ""; 
+// ── Valence Rules (evidence density, not mood) ─────────────────────
+function valenceEvidenceRule(valence: number): string {
+  if (valence < -0.5) return "- High-skepticism mode: require 2+ distinct evidence citations for every non-trivial claim.";
+  if (valence < -0.15) return "- Standard evidence mode: cite at least one source per non-trivial claim.";
+  if (valence > 0.5) return "- Synthesis mode: you may connect ideas beyond explicit evidence. Mark speculative leaps with *(synthesis)*.";
+  if (valence > 0.15) return "- Constructive mode: cite evidence where available, then suggest 1–2 concrete next steps.";
+  return "- Standard evidence rules apply.";
 }
 
-export function verbosityDirective(maxTokens: number): string {
-  if (maxTokens < 500) return " Keep your response concise — under 150 words.";
-  if (maxTokens > 700) return " You may elaborate and explore in detail.";
-  return ""; 
+// ── Token Directive (aligns with API maxTokens) ────────────────────
+function tokenDirective(maxTokens: number): string {
+  if (maxTokens < 500) return "- Concise mode: one idea per sentence. No examples unless the task demands them.";
+  if (maxTokens > 700) return "- Long-form mode: elaborate with examples, step-by-step reasoning, and edge-case notes where relevant.";
+  return "";
 }
 
 export function buildSystemPrompt(
@@ -37,7 +56,22 @@ export function buildSystemPrompt(
   memoryContext?: string,
   projectGrounding?: string,
 ): string {
-  let prompt = [
+  const parts: string[] = [];
+
+  // 1. Runtime state header (structured, at the top)
+  if (snap) {
+    parts.push(
+      "## GZMO Runtime State",
+      `phase: ${snap.phase}`,
+      `temperature: ${snap.llmTemperature.toFixed(2)} (${snap.llmTemperature > 0.9 ? "high creativity" : snap.llmTemperature < 0.5 ? "conservative" : "balanced"})`,
+      `max_tokens: ${snap.llmMaxTokens}`,
+      `valence: ${snap.llmValence >= 0 ? "+" : ""}${snap.llmValence.toFixed(2)}`,
+      "",
+    );
+  }
+
+  // 2. Identity and base constraints
+  parts.push(
     "You are GZMO, a sovereign local AI daemon running on this machine.",
     "GZMO is your name, not an acronym. You are NOT a fictional character.",
     "Respond in Markdown.",
@@ -46,18 +80,22 @@ export function buildSystemPrompt(
     "- Follow the task's requested structure exactly (headings, bullet counts, 'exactly N', etc.).",
     "- Do not invent information. If something is not present in the task (or provided context), say so explicitly and keep it brief.",
     "- If asked to quote text, quote it verbatim from the task/context.",
-  ].join("\n");
+    "",
+  );
 
+  // 3. Phase contract + valence + token directives
   if (snap) {
-    prompt += " " + phasePersona(snap.phase);
-    prompt += valenceDirective(snap.llmValence);
-    prompt += verbosityDirective(snap.llmMaxTokens);
-    prompt += ` [T:${snap.tension.toFixed(0)} E:${snap.energy.toFixed(0)}% ${snap.phase} V:${snap.llmValence >= 0 ? "+" : ""}${snap.llmValence.toFixed(2)}]`;
+    parts.push("## Output Contract");
+    parts.push(phaseContract(snap.phase));
+    parts.push(valenceEvidenceRule(snap.llmValence));
+    const tok = tokenDirective(snap.llmMaxTokens);
+    if (tok) parts.push(tok);
+    parts.push("");
   }
 
+  // 4. Vault grounding
   if (vaultContext) {
-    prompt += [
-      "",
+    parts.push(
       "Grounding rules (when context is provided):",
       "- Treat the 'Evidence Packet' as the only allowed evidence source.",
       "- Every answer MUST include at least one evidence citation like [E1].",
@@ -66,22 +104,25 @@ export function buildSystemPrompt(
       "- Never claim you wrote/changed files unless the evidence packet contains it explicitly.",
       "",
       vaultContext,
-    ].join("\n");
+      "",
+    );
   }
 
+  // 5. Project grounding
   if (projectGrounding) {
-    prompt += [
-      "",
+    parts.push(
       "Project grounding (deterministic):",
       projectGrounding.trim(),
-    ].join("\n");
+      "",
+    );
   }
 
+  // 6. Memory context
   if (memoryContext) {
-    prompt += memoryContext;
+    parts.push(memoryContext);
   }
 
-  return prompt;
+  return parts.join("\n");
 }
 
 export function shouldInjectProjectGrounding(action: TaskAction, body: string): boolean {

@@ -1,31 +1,14 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
+import { Type, type Static } from "typebox";
 
 type GzmoAction = "think" | "search" | "chain";
-
-type ExtensionAPI = {
-  on?: (event: string, handler: (...args: any[]) => void) => void;
-  registerTool?: (tool: {
-    name: string;
-    description: string;
-    parameters?: any;
-    execute: (args: any, ctx?: any) => Promise<any> | any;
-  }) => void;
-  registerCommand?: (cmd: {
-    name: string;
-    description?: string;
-    handler: (args: any, ctx?: any) => Promise<any> | any;
-  }) => void;
-  ui?: {
-    setStatus?: (s: string) => void;
-    setWidget?: (id: string, content: string) => void;
-    notify?: (s: string) => void;
-    confirm?: (opts: { title?: string; message: string }) => Promise<boolean> | boolean;
-    openFile?: (filePath: string) => Promise<void> | void;
-  };
-  cwd?: () => string;
-};
 
 function asNonEmptyString(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -66,7 +49,7 @@ async function parseDotEnvFile(envFile: string): Promise<Record<string, string>>
 
 async function walkForEnv(startDir: string): Promise<string | null> {
   let dir = path.resolve(startDir);
-  // Walk upwards; at each level prefer .env then gzmo-daemon/.env
+  // Walk upwards; at each level prefer .env then gzmo-daemon/.env.
   // Mirrors contrib/pi-gzmo-skill/scripts/resolve_env.sh behavior.
   while (true) {
     const env1 = path.join(dir, ".env");
@@ -79,8 +62,8 @@ async function walkForEnv(startDir: string): Promise<string | null> {
   }
 }
 
-async function resolveVaultPath(api: ExtensionAPI): Promise<{ vaultPath: string; envFile?: string }> {
-  // Order: GZMO_ENV_FILE → VAULT_PATH env → walk from cwd
+async function resolveVaultPath(): Promise<{ vaultPath: string; envFile?: string }> {
+  // Order: GZMO_ENV_FILE → VAULT_PATH env → walk from cwd.
   const envFromProcess = asNonEmptyString(process.env.VAULT_PATH);
   const envFileOverride = asNonEmptyString(process.env.GZMO_ENV_FILE);
 
@@ -97,11 +80,10 @@ async function resolveVaultPath(api: ExtensionAPI): Promise<{ vaultPath: string;
     return { vaultPath: envFromProcess };
   }
 
-  const cwd = api.cwd?.() ?? process.cwd();
-  const walked = await walkForEnv(cwd);
+  const walked = await walkForEnv(process.cwd());
   if (!walked) {
     throw new Error(
-      "No .env found. Set GZMO_ENV_FILE=/path/to/gzmo-daemon/.env or set VAULT_PATH, or run Pi from within the tinyFolder repo tree."
+      "No .env found. Set GZMO_ENV_FILE=/path/to/gzmo-daemon/.env or set VAULT_PATH, or run Pi from within the tinyFolder repo tree.",
     );
   }
   const parsed = await parseDotEnvFile(walked);
@@ -175,10 +157,36 @@ function mkTaskFilename(): string {
   return `${ts}_${rand}.md`;
 }
 
-async function updateUiStatus(api: ExtensionAPI): Promise<void> {
-  if (!api.ui?.setStatus && !api.ui?.setWidget) return;
+type TaskRow = { path: string; status: string | null; updated_at: string; action: string | null };
+
+async function listInbox(filterStatus?: string | null, limit = 20): Promise<TaskRow[]> {
+  const { vaultPath } = await resolveVaultPath();
+  const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
+  const tasks: TaskRow[] = [];
+  if (!(await fileExists(inboxDir))) return [];
+  const entries = await fsp.readdir(inboxDir);
+  for (const e of entries) {
+    if (!e.endsWith(".md")) continue;
+    const p = path.join(inboxDir, e);
+    try {
+      const st = await fsp.stat(p);
+      const md = await fsp.readFile(p, "utf8");
+      const { frontmatter } = parseFrontmatter(md);
+      const status = asNonEmptyString(frontmatter["status"]);
+      const action = asNonEmptyString(frontmatter["action"]);
+      if (filterStatus && status !== filterStatus) continue;
+      tasks.push({ path: p, status, action, updated_at: st.mtime.toISOString() });
+    } catch {
+      // ignore unreadable tasks
+    }
+  }
+  tasks.sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+  return tasks.slice(0, Math.max(1, Math.min(200, limit)));
+}
+
+async function updateUiStatus(ctx: ExtensionContext): Promise<void> {
   try {
-    const { vaultPath } = await resolveVaultPath(api);
+    const { vaultPath } = await resolveVaultPath();
     const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
     let pending = 0;
     let processing = 0;
@@ -197,239 +205,240 @@ async function updateUiStatus(api: ExtensionAPI): Promise<void> {
       }
     }
     const vaultName = path.basename(vaultPath);
-    const status = `GZMO: ${pending} pending, ${processing} processing | vault: ${vaultName}`;
-    api.ui?.setStatus?.(status);
-    api.ui?.setWidget?.("gzmo", status);
-  } catch (e: any) {
-    const msg = e?.message ? String(e.message) : String(e);
-    api.ui?.setStatus?.(`GZMO: env missing (${msg})`);
+    const summary = `GZMO: ${pending} pending, ${processing} processing`;
+    ctx.ui.setStatus("gzmo", summary);
+    ctx.ui.setWidget("gzmo", [summary, `vault: ${vaultName}`]);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    ctx.ui.setStatus("gzmo", `GZMO: env missing (${msg})`);
+    ctx.ui.setWidget("gzmo", [`GZMO: env missing`, msg]);
   }
 }
 
-export default function gzmoTinyFolderExtension(api: ExtensionAPI) {
-  if (!api?.registerTool) {
-    throw new Error("Pi API missing registerTool(). This extension requires Pi tool registration support.");
-  }
+const SubmitParams = Type.Object({
+  action: Type.Union([Type.Literal("think"), Type.Literal("search"), Type.Literal("chain")]),
+  body: Type.String({ description: "Markdown body of the task" }),
+  chain_next: Type.Optional(
+    Type.Union([Type.String(), Type.Null()], {
+      description: "Required when action=chain. Filename for the next step under GZMO/Subtasks/.",
+    }),
+  ),
+});
 
-  async function listLastTasks(limit: number) {
-    const { vaultPath } = await resolveVaultPath(api);
-    const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
-    const tasks: Array<{ path: string; status: string | null; updated_at: string; action?: string | null }> = [];
-    if (await fileExists(inboxDir)) {
-      const entries = await fsp.readdir(inboxDir);
-      for (const e of entries) {
-        if (!e.endsWith(".md")) continue;
-        const p = path.join(inboxDir, e);
-        try {
-          const st = await fsp.stat(p);
-          const md = await fsp.readFile(p, "utf8");
-          const { frontmatter } = parseFrontmatter(md);
-          const status = asNonEmptyString(frontmatter["status"]);
-          const action = asNonEmptyString(frontmatter["action"]);
-          tasks.push({ path: p, status, action, updated_at: st.mtime.toISOString() });
-        } catch {
-          // ignore
-        }
-      }
-    }
-    tasks.sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
-    return { tasks: tasks.slice(0, Math.max(1, Math.min(200, limit))) };
-  }
+const ReadParams = Type.Object({
+  task_path: Type.String(),
+  tail_lines: Type.Optional(Type.Integer({ minimum: 10, maximum: 400, default: 60 })),
+});
 
-  api.on?.("session_start", () => {
-    void updateUiStatus(api);
+const WatchParams = Type.Object({
+  task_path: Type.String(),
+  max_seconds: Type.Optional(Type.Integer({ minimum: 5, maximum: 86400, default: 600 })),
+  poll_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 30, default: 2 })),
+  tail_lines: Type.Optional(Type.Integer({ minimum: 10, maximum: 600, default: 120 })),
+});
+
+const ListParams = Type.Object({
+  status: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, default: 20 })),
+});
+
+const LastParams = Type.Object({
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, default: 10 })),
+});
+
+const HealthParams = Type.Object({
+  lines: Type.Optional(Type.Integer({ minimum: 5, maximum: 200, default: 60 })),
+});
+
+export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
+  pi.on("session_start", async (_event, ctx) => {
+    await updateUiStatus(ctx);
   });
 
-  api.registerTool({
+  pi.registerTool({
     name: "gzmo_submit_task",
+    label: "GZMO submit",
     description:
       "Create a tinyFolder/GZMO Inbox task file under VAULT_PATH/GZMO/Inbox with correct frontmatter (status/action).",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      required: ["action", "body"],
-      properties: {
-        action: { type: "string", enum: ["think", "search", "chain"] },
-        body: { type: "string", description: "Markdown body of the task" },
-        chain_next: { type: ["string", "null"], default: null },
-      },
-    },
-    execute: async (args: any) => {
-      const action = args?.action as GzmoAction;
-      const body = asNonEmptyString(args?.body);
-      const chainNext = args?.chain_next ?? null;
+    parameters: SubmitParams,
+    async execute(
+      _toolCallId: string,
+      params: Static<typeof SubmitParams>,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext,
+    ): Promise<AgentToolResult<{ task_path: string }>> {
+      const action = params.action as GzmoAction;
+      const body = asNonEmptyString(params.body);
+      const chainNext = params.chain_next ?? null;
       if (!body) throw new Error("body is required");
-      if (action !== "think" && action !== "search" && action !== "chain") throw new Error(`Invalid action: ${action}`);
 
-      const { vaultPath } = await resolveVaultPath(api);
+      const { vaultPath } = await resolveVaultPath();
       const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
       const filePath = path.join(inboxDir, mkTaskFilename());
       const fm = makeTaskFrontmatter(action, chainNext ?? undefined);
       await atomicWriteFile(filePath, `${fm}${body}\n`);
-      api.ui?.notify?.(`GZMO task submitted: ${filePath}`);
-      await updateUiStatus(api);
-      return { task_path: filePath };
+      ctx.ui.notify(`GZMO task submitted: ${filePath}`, "info");
+      await updateUiStatus(ctx);
+      return {
+        content: [{ type: "text", text: filePath }],
+        details: { task_path: filePath },
+      };
     },
   });
 
-  api.registerTool({
+  pi.registerTool({
     name: "gzmo_read_task",
+    label: "GZMO read",
     description: "Read a GZMO task file, returning status/frontmatter plus a small tail excerpt.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      required: ["task_path"],
-      properties: {
-        task_path: { type: "string" },
-        tail_lines: { type: "integer", default: 60, minimum: 10, maximum: 400 },
-      },
-    },
-    execute: async (args: any) => {
-      const taskPath = asNonEmptyString(args?.task_path);
-      const tailN = typeof args?.tail_lines === "number" ? args.tail_lines : 60;
+    parameters: ReadParams,
+    async execute(
+      _toolCallId: string,
+      params: Static<typeof ReadParams>,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext,
+    ): Promise<AgentToolResult<{ status: string | null; frontmatter: Record<string, string>; tail: string }>> {
+      const taskPath = asNonEmptyString(params.task_path);
+      const tailN = typeof params.tail_lines === "number" ? params.tail_lines : 60;
       if (!taskPath) throw new Error("task_path is required");
       const md = await fsp.readFile(taskPath, "utf8");
       const { frontmatter } = parseFrontmatter(md);
       const status = asNonEmptyString(frontmatter["status"]);
       const tail = await tailLines(taskPath, Math.max(10, Math.min(400, tailN)));
-      await updateUiStatus(api);
-      return { status, frontmatter, tail };
+      await updateUiStatus(ctx);
+      return {
+        content: [{ type: "text", text: `status: ${status ?? "?"}\n\n${tail}` }],
+        details: { status, frontmatter, tail },
+      };
     },
   });
 
-  api.registerTool({
+  pi.registerTool({
     name: "gzmo_watch_task",
+    label: "GZMO watch",
     description: "Poll a task file until status is completed or failed (or timeout). Returns a compact excerpt.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      required: ["task_path"],
-      properties: {
-        task_path: { type: "string" },
-        max_seconds: { type: "integer", default: 600, minimum: 5, maximum: 86400 },
-        poll_seconds: { type: "integer", default: 2, minimum: 1, maximum: 30 },
-        tail_lines: { type: "integer", default: 120, minimum: 10, maximum: 600 },
-      },
-    },
-    execute: async (args: any) => {
-      const taskPath = asNonEmptyString(args?.task_path);
+    parameters: WatchParams,
+    async execute(
+      _toolCallId: string,
+      params: Static<typeof WatchParams>,
+      signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext,
+    ): Promise<AgentToolResult<{ final_status: string; excerpt: string }>> {
+      const taskPath = asNonEmptyString(params.task_path);
       if (!taskPath) throw new Error("task_path is required");
-      const maxSec = typeof args?.max_seconds === "number" ? args.max_seconds : 600;
-      const pollSec = typeof args?.poll_seconds === "number" ? args.poll_seconds : 2;
-      const tailN = typeof args?.tail_lines === "number" ? args.tail_lines : 120;
+      const maxSec = typeof params.max_seconds === "number" ? params.max_seconds : 600;
+      const pollSec = typeof params.poll_seconds === "number" ? params.poll_seconds : 2;
+      const tailN = typeof params.tail_lines === "number" ? params.tail_lines : 120;
 
       const started = Date.now();
       let lastStatus: string | null = null;
       while ((Date.now() - started) / 1000 < maxSec) {
+        if (signal?.aborted) throw new Error("Aborted");
         const status = await readTaskStatus(taskPath);
         lastStatus = status;
         if (status === "completed" || status === "failed") {
           const excerpt = await tailLines(taskPath, Math.max(10, Math.min(600, tailN)));
-          await updateUiStatus(api);
-          return { final_status: status, excerpt };
+          await updateUiStatus(ctx);
+          return {
+            content: [{ type: "text", text: `final_status: ${status}\n\n${excerpt}` }],
+            details: { final_status: status, excerpt },
+          };
         }
         await new Promise((r) => setTimeout(r, Math.max(1, pollSec) * 1000));
       }
-      await updateUiStatus(api);
+      await updateUiStatus(ctx);
       throw new Error(`Timeout after ${maxSec}s waiting for completed|failed (last status: ${lastStatus ?? "unknown"})`);
     },
   });
 
-  api.registerTool({
+  pi.registerTool({
     name: "gzmo_list_tasks",
+    label: "GZMO list",
     description: "List tasks in VAULT_PATH/GZMO/Inbox with statuses, newest first.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        status: { type: ["string", "null"], default: null },
-        limit: { type: "integer", default: 20, minimum: 1, maximum: 200 },
-      },
-    },
-    execute: async (args: any) => {
-      const desiredStatus = asNonEmptyString(args?.status ?? "") ?? null;
-      const limit = typeof args?.limit === "number" ? args.limit : 20;
-      const { vaultPath } = await resolveVaultPath(api);
-      const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
-      const tasks: Array<{ path: string; status: string | null; updated_at: string; action?: string | null }> = [];
-      if (!(await fileExists(inboxDir))) return { tasks: [] };
-      const entries = await fsp.readdir(inboxDir);
-      for (const e of entries) {
-        if (!e.endsWith(".md")) continue;
-        const p = path.join(inboxDir, e);
-        try {
-          const st = await fsp.stat(p);
-          const md = await fsp.readFile(p, "utf8");
-          const { frontmatter } = parseFrontmatter(md);
-          const status = asNonEmptyString(frontmatter["status"]);
-          const action = asNonEmptyString(frontmatter["action"]);
-          if (desiredStatus && status !== desiredStatus) continue;
-          tasks.push({ path: p, status, action, updated_at: st.mtime.toISOString() });
-        } catch {
-          // ignore
-        }
-      }
-      tasks.sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
-      await updateUiStatus(api);
-      return { tasks: tasks.slice(0, Math.max(1, Math.min(200, limit))) };
+    parameters: ListParams,
+    async execute(
+      _toolCallId: string,
+      params: Static<typeof ListParams>,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext,
+    ): Promise<AgentToolResult<{ tasks: TaskRow[] }>> {
+      const desiredStatus = asNonEmptyString(params.status ?? "") ?? null;
+      const limit = typeof params.limit === "number" ? params.limit : 20;
+      const tasks = await listInbox(desiredStatus, limit);
+      await updateUiStatus(ctx);
+      const lines = tasks.map((t) => `- ${t.status ?? "?"} ${t.action ?? "?"}  ${t.path}`);
+      return {
+        content: [{ type: "text", text: lines.join("\n") || "(no tasks)" }],
+        details: { tasks },
+      };
     },
   });
 
-  api.registerTool({
+  pi.registerTool({
     name: "gzmo_last_tasks",
+    label: "GZMO last",
     description: "Convenience wrapper: list last N tasks (newest first).",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        limit: { type: "integer", default: 10, minimum: 1, maximum: 200 },
-      },
-    },
-    execute: async (args: any) => {
-      const limit = typeof args?.limit === "number" ? args.limit : 10;
-      await updateUiStatus(api);
-      return await listLastTasks(limit);
+    parameters: LastParams,
+    async execute(
+      _toolCallId: string,
+      params: Static<typeof LastParams>,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext,
+    ): Promise<AgentToolResult<{ tasks: TaskRow[] }>> {
+      const limit = typeof params.limit === "number" ? params.limit : 10;
+      const tasks = await listInbox(null, limit);
+      await updateUiStatus(ctx);
+      const lines = tasks.map((t) => `- ${t.status ?? "?"} ${t.action ?? "?"}  ${t.path}`);
+      return {
+        content: [{ type: "text", text: lines.join("\n") || "(no tasks)" }],
+        details: { tasks },
+      };
     },
   });
 
-  api.registerTool({
-    name: "gzmo_open_task",
-    description: "Best-effort open a task file in the editor; falls back to returning the path.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      required: ["task_path"],
-      properties: {
-        task_path: { type: "string" },
-      },
-    },
-    execute: async (args: any) => {
-      const taskPath = asNonEmptyString(args?.task_path);
-      if (!taskPath) throw new Error("task_path is required");
-      if (api.ui?.openFile) {
-        await api.ui.openFile(taskPath);
-        return { opened: true };
+  pi.registerTool({
+    name: "gzmo_health",
+    label: "GZMO health",
+    description: "Read the latest daemon health report from VAULT_PATH/GZMO/health.md.",
+    parameters: HealthParams,
+    async execute(
+      _toolCallId: string,
+      params: Static<typeof HealthParams>,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext,
+    ): Promise<AgentToolResult<{ health_path: string }>> {
+      const { vaultPath } = await resolveVaultPath();
+      const healthPath = path.join(vaultPath, "GZMO", "health.md");
+      const tailN = typeof params.lines === "number" ? params.lines : 60;
+      let text: string;
+      try {
+        text = await tailLines(healthPath, Math.max(5, Math.min(200, tailN)));
+      } catch {
+        text = "(health report not yet generated)";
       }
-      return { opened: false, task_path: taskPath };
+      ctx.ui.notify("GZMO health loaded", "info");
+      return {
+        content: [{ type: "text", text }],
+        details: { health_path: healthPath },
+      };
     },
   });
 
-  // Human-invoked commands (if supported)
-  api.registerCommand?.({
-    name: "/gzmo-last",
+  pi.registerCommand("gzmo-last", {
     description: "Show last N GZMO tasks (newest first). Usage: /gzmo-last 10",
-    handler: async (args: any) => {
-      const n = typeof args?.[0] === "number" ? args[0] : parseInt(String(args?.[0] ?? "10"), 10);
-      const limit = Number.isFinite(n) ? Math.max(1, Math.min(200, n)) : 10;
-      const res = await listLastTasks(limit);
-      const lines = res.tasks.map((t) => `- ${t.status ?? "?"} ${t.action ?? "?"}  ${t.path}`);
-      api.ui?.notify?.(lines.join("\n"));
-      await updateUiStatus(api);
-      return res;
+    handler: async (args, ctx) => {
+      const raw = typeof args === "string" ? args.trim() : "";
+      const parsed = raw.length ? parseInt(raw, 10) : Number.NaN;
+      const limit = Number.isFinite(parsed) ? Math.max(1, Math.min(200, parsed)) : 10;
+      const tasks = await listInbox(null, limit);
+      const lines = tasks.map((t) => `- ${t.status ?? "?"} ${t.action ?? "?"}  ${t.path}`);
+      ctx.ui.notify(lines.join("\n") || "(no tasks)", "info");
+      await updateUiStatus(ctx);
     },
   });
-
-  // Initialize UI once on load as well.
-  void updateUiStatus(api);
 }
-

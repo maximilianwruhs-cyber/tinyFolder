@@ -19,6 +19,7 @@ GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `searc
 - [Profiles / safe modes](#profiles--safe-modes)
 - [Proof / smoke / eval commands](#proof--smoke--eval-commands)
 - [Troubleshooting](#troubleshooting)
+- [Fine-tuning (advanced)](#fine-tuning-advanced)
 - [Repo contents (what is public)](#repo-contents-what-is-public)
 - [Pi skill (optional)](#pi-skill-optional)
 - [License](#license)
@@ -42,7 +43,16 @@ cd gzmo-daemon
 bun install
 ```
 
-3) Point the daemon at your vault:
+3) Run the setup wizard (auto-detects hardware, picks model, writes `.env`):
+
+```bash
+./scripts/onboard.sh --auto
+# Or interactive: ./scripts/onboard.sh
+```
+
+The wizard supports everything from CPU-only laptops up to the **NVIDIA DGX Spark** (128GB unified memory). On a DGX Spark it will auto-select a 70B–72B-class model (e.g. `qwen2.5:72b` or `llama3.3:70b`).
+
+Or configure manually:
 
 ```bash
 cat > gzmo-daemon/.env <<'EOF'
@@ -166,10 +176,19 @@ This project is maintained for **Ubuntu Linux** (and similar distros with **syst
 
 ### Recommended models
 
-- **Inference**: `hermes3:8b` (default model tag used by the daemon if `OLLAMA_MODEL` is not set)
-- **Embeddings**: `nomic-embed-text` (used by the embeddings pipeline)
+The default is **`hermes3:8b`** — excellent tool-use and reasoning for its size.
 
-Pull them:
+On high-end hardware the setup wizard will suggest bigger models:
+
+| Hardware | Suggested model | VRAM / RAM needed |
+|---|---|---|
+| CPU-only laptop | `phi3:mini` or `qwen2.5:0.5b` | 4–6 GB RAM |
+| 4–8 GB VRAM GPU | `hermes3:8b` or `qwen2.5:7b` | 4–8 GB VRAM |
+| 16–24 GB VRAM GPU | `qwq:32b` or `deepseek-r1:14b` | 16–24 GB VRAM |
+| 48–80 GB VRAM GPU | `llama3.1:70b` or `deepseek-r1:32b` | 48–64 GB VRAM |
+| **NVIDIA DGX Spark** (128 GB unified) | `qwen2.5:72b` or `llama3.3:70b` | ~48–64 GB |
+
+Pull the default set:
 
 ```bash
 ollama pull hermes3:8b
@@ -526,6 +545,21 @@ If your vault permissions are wrong, or `VAULT_PATH` is incorrect, the doctor ou
 ### `ExecStartPre` wait for Ollama times out
 
 - Ensure Ollama is running and reachable at `OLLAMA_URL`, or increase **`GZMO_OLLAMA_WAIT_MAX_SEC`** in `gzmo-daemon/.env`, or set **`GZMO_SYSTEMD_WAIT_FOR_OLLAMA=0`** to skip the pre-start wait (daemon will still retry internally).
+
+---
+
+## Fine-tuning (advanced)
+
+Ollama runs fine-tuned models but does not train them. For customizing GZMO's inference quality — from simple system prompt tuning to full LoRA fine-tuning on your vault — see the step-by-step guide:
+
+**[`docs/FINE_TUNING.md`](docs/FINE_TUNING.md)**
+
+Quick overview of what's covered:
+- **Tier 1:** System prompt tuning (5 min, zero GPU)
+- **Tier 2:** LoRA fine-tuning with Unsloth (2–4 hrs, DGX Spark can train 70B LoRA)
+- **Tier 3:** Full fine-tuning + custom embedding models
+- Importing Safetensors, GGUF, and adapters into Ollama
+- GZMO-specific Modelfile templates
 
 ---
 

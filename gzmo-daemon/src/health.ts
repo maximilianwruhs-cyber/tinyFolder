@@ -84,7 +84,7 @@ export async function writeHealth(params: {
   profile: string;
   ollamaUrl: string;
   model: string;
-  pulse: HealthSnapshot["pulse"];
+  pulse?: HealthSnapshot["pulse"];
   scheduler: HealthSnapshot["scheduler"];
   counts: HealthSnapshot["counts"];
 }): Promise<void> {
@@ -99,7 +99,16 @@ export async function writeHealth(params: {
       ollamaUrl: params.ollamaUrl,
       model: params.model,
     },
-    pulse: params.pulse,
+    pulse: params.pulse ?? {
+      tension: 0,
+      energy: 0,
+      phase: "idle",
+      alive: true,
+      deaths: 0,
+      tick: 0,
+      thoughtsIncubating: 0,
+      thoughtsCrystallized: 0,
+    },
     paths: {
       vaultPath,
       inboxDir: join(vaultPath, "GZMO", "Inbox"),
@@ -212,7 +221,7 @@ function buildOperatorHints(snap: HealthSnapshot): string[] {
   if (snap.counts.inboxFailed > 0) hints.push("Failed inbox tasks exist; inspect recent failures before adding more autonomy.");
   if (snap.counts.quarantineNotes > 0) hints.push("Quarantine contains notes; review upstream prompt or gate before trusting new wiki output.");
   if (!snap.scheduler.embeddingsLiveEnabled) hints.push("Embeddings live sync is disabled; restart with live sync for fresher RAG.");
-  if (snap.pulse.energy < 30) hints.push("Energy is low; autonomous dream/self-ask cycles may pause.");
+  if (snap.pulse.energy > 0 && snap.pulse.energy < 30) hints.push("Energy is low; autonomous dream/self-ask cycles may pause.");
   if (snap.pulse.tension > 70) hints.push("Tension is high; prefer verification and pruning over generative work.");
   if (hints.length === 0) hints.push("No immediate operator action suggested.");
   return hints;
