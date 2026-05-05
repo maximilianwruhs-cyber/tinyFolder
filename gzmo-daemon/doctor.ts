@@ -31,6 +31,7 @@ import { TaskMemory } from "./src/memory";
 import type { TaskEvent } from "./src/watcher";
 import type { EmbeddingStore } from "./src/embeddings";
 import type { ChaosSnapshot } from "./src/types";
+import { TaskDocument } from "./src/frontmatter";
 
 function resolveVaultPath(): string {
   return process.env.VAULT_PATH ? resolve(process.env.VAULT_PATH) : resolve(import.meta.dir, "../vault");
@@ -430,7 +431,9 @@ async function main() {
           timeoutMs: 90_000,
           run: async () => {
             const fp = writeTask("_doctor_think", { status: "pending", action: "think" }, "State your identity and phase in <= 40 words.");
-            const ev: TaskEvent = { filePath: fp, fileName: "_doctor_think", status: "pending", body: "State your identity and phase in <= 40 words.", frontmatter: { status: "pending", action: "think" } };
+            const doc = await TaskDocument.load(fp);
+            if (!doc) throw new Error(`Doctor failed to load task document: ${fp}`);
+            const ev: TaskEvent = { filePath: fp, fileName: "_doctor_think", status: "pending", body: "State your identity and phase in <= 40 words.", frontmatter: { status: "pending", action: "think" }, document: doc };
             await processTask(ev, watcher, pulse, store, memory);
             return { status: "PASS", summary: "Completed" };
           },
@@ -445,7 +448,9 @@ async function main() {
           timeoutMs: 120_000,
           run: async () => {
             const fp = writeTask("_doctor_search", { status: "pending", action: "search" }, "From the vault, explain PulseLoop and name 2 state variables.");
-            const ev: TaskEvent = { filePath: fp, fileName: "_doctor_search", status: "pending", body: "From the vault, explain PulseLoop and name 2 state variables.", frontmatter: { status: "pending", action: "search" } };
+            const doc = await TaskDocument.load(fp);
+            if (!doc) throw new Error(`Doctor failed to load task document: ${fp}`);
+            const ev: TaskEvent = { filePath: fp, fileName: "_doctor_search", status: "pending", body: "From the vault, explain PulseLoop and name 2 state variables.", frontmatter: { status: "pending", action: "search" }, document: doc };
             await processTask(ev, watcher, pulse, store, memory);
             return { status: "PASS", summary: "Completed" };
           },
@@ -461,7 +466,9 @@ async function main() {
           run: async () => {
             const next = "_doctor_chain_step2.md";
             const fp = writeTask("_doctor_chain", { status: "pending", action: "chain", chain_next: next }, "Step 1: List exactly 3 subsystems.");
-            const ev: TaskEvent = { filePath: fp, fileName: "_doctor_chain", status: "pending", body: "Step 1: List exactly 3 subsystems.", frontmatter: { status: "pending", action: "chain", chain_next: next } };
+            const doc = await TaskDocument.load(fp);
+            if (!doc) throw new Error(`Doctor failed to load task document: ${fp}`);
+            const ev: TaskEvent = { filePath: fp, fileName: "_doctor_chain", status: "pending", body: "Step 1: List exactly 3 subsystems.", frontmatter: { status: "pending", action: "chain", chain_next: next }, document: doc };
             await processTask(ev, watcher, pulse, store, memory);
             const ok = fs.existsSync(join(env.inboxPath, next));
             if (!ok) return { status: "FAIL", summary: "Missing chain_next file", details: next };

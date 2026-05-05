@@ -29,6 +29,7 @@ import { TaskMemory } from "./src/memory";
 import type { ChaosSnapshot } from "./src/types";
 import type { TaskEvent } from "./src/watcher";
 import type { EmbeddingStore } from "./src/embeddings";
+import { TaskDocument } from "./src/frontmatter";
 
 // ── Paths ───────────────────────────────────────────────────
 const VAULT_PATH = process.env.VAULT_PATH ?? resolve(import.meta.dir, "../../Obsidian_Vault");
@@ -150,12 +151,15 @@ Do NOT fabricate information. If you don't know something, say "unknown".
 
 const t1Start = Date.now();
 try {
+  const doc = await TaskDocument.load(t1File);
+  if (!doc) throw new Error(`Failed to load task document: ${t1File}`);
   const event: TaskEvent = {
     filePath: t1File,
     fileName: "_stress_01_identity",
     status: "pending",
     body: `Answer these questions precisely:\n1. What is your name?\n2. Are you a fictional character?\n3. What is your current operational phase?\n4. What runtime environment are you deployed on?\n\nDo NOT fabricate information. If you don't know something, say "unknown".`,
     frontmatter: { status: "pending", action: "think" },
+    document: doc,
   };
   await processTask(event, watcher, pulse, store, memory);
   const elapsed = Date.now() - t1Start;
@@ -189,12 +193,15 @@ Search the vault: What is the PulseLoop and how does the Lorenz attractor influe
 
 const t2Start = Date.now();
 try {
+  const doc = await TaskDocument.load(t2File);
+  if (!doc) throw new Error(`Failed to load task document: ${t2File}`);
   const event: TaskEvent = {
     filePath: t2File,
     fileName: "_stress_02_rag",
     status: "pending",
     body: "Search the vault: What is the PulseLoop and how does the Lorenz attractor influence the chaos engine's behavior? Reference specific technical details from the vault documents.",
     frontmatter: { status: "pending", action: "search" },
+    document: doc,
   };
   await processTask(event, watcher, pulse, store, memory);
   const elapsed = Date.now() - t2Start;
@@ -285,12 +292,15 @@ Step 1: List exactly 3 technical components of the GZMO daemon architecture. Be 
 
 const t4Start = Date.now();
 try {
+  const doc = await TaskDocument.load(t4File);
+  if (!doc) throw new Error(`Failed to load task document: ${t4File}`);
   const event: TaskEvent = {
     filePath: t4File,
     fileName: "_stress_04_chain",
     status: "pending",
     body: "Step 1: List exactly 3 technical components of the GZMO daemon architecture. Be brief.",
     frontmatter: { status: "pending", action: "chain", chain_next: t4NextFile },
+    document: doc,
   };
   await processTask(event, watcher, pulse, store, memory);
   const elapsed = Date.now() - t4Start;

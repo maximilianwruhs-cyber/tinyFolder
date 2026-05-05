@@ -39,9 +39,10 @@ export class ThinkPipeline implements TaskPipeline {
     let finalOutput = rawOutput;
     
     if (action === "chain") {
-      const hasChain = checkChainChecklist(finalOutput);
+      const check = checkChainChecklist({ userPrompt: req.event.body, answer: finalOutput });
+      const hasChain = check.violations.length === 0;
       if (!hasChain) {
-        finalOutput = enforceChainChecklist(req.event.body, finalOutput);
+        finalOutput = enforceChainChecklist({ userPrompt: req.event.body, answer: finalOutput }).out;
       }
     }
     

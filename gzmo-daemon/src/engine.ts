@@ -38,6 +38,8 @@ import { applyPartQueryHooks, applyPostAnswerHooks, applyPostEvidenceMultiHooks,
 import { routeJudgeMultipart } from "./route_judge";
 import { atomicWriteJson } from "./vault_fs";
 import { applyMindFilter } from "./mind_filter";
+import { SearchPipeline } from "./pipelines/search_pipeline";
+import { ThinkPipeline } from "./pipelines/think_pipeline";
 
 // ── Configuration ──────────────────────────────────────────
 function normalizeOllamaV1BaseUrl(raw: string | undefined): string {
@@ -166,6 +168,7 @@ export async function processTask(
   memory?: TaskMemory,
 ): Promise<void> {
   const { filePath, fileName, body, frontmatter, document } = event;
+  const vaultRoot = filePath.split(/[\\\/]GZMO[\\\/]/)[0] ?? resolve(filePath, "../../..");
   const startTime = Date.now();
   const spans: Array<{ name: string; ms: number }> = [];
   const hooks = defaultEngineHooks();
@@ -187,6 +190,7 @@ export async function processTask(
     type: "task_received",
     fileName,
     action: String(frontmatter?.action ?? "think"),
+    bodyLength: String(body ?? "").length,
   });
 
   try {
@@ -194,8 +198,6 @@ export async function processTask(
     console.log(`[ENGINE] Processing: ${fileName} (action: ${action})`);
 
     await span("frontmatter.processing", () => document.markProcessing());
-
-    const vaultRoot = filePath.split(/[\\\/]GZMO[\\\/]/)[0] ?? resolve(filePath, "../../..");
     const req = { event, pulse, embeddingStore, memory, hooks, vaultRoot };
 
     const pipeline = action === "search" ? new SearchPipeline() : new ThinkPipeline();

@@ -38,6 +38,7 @@ import { TaskMemory } from "./src/memory";
 import { defaultConfig } from "./src/types";
 import type { ChaosSnapshot } from "./src/types";
 import type { TaskEvent } from "./src/watcher";
+import { TaskDocument } from "./src/frontmatter";
 import type { EmbeddingStore } from "./src/embeddings";
 
 type StepStatus = "PASS" | "FAIL" | "WARN" | "SKIP";
@@ -336,12 +337,15 @@ try {
   {
     const filePath = join(INBOX_PATH, "_doctor_think.md");
     fs.writeFileSync(filePath, `---\nstatus: pending\naction: think\n---\n\nState your name and current phase. Keep it under 40 words.\n`);
+    const doc = await TaskDocument.load(filePath);
+    if (!doc) throw new Error(`Failed to load task document: ${filePath}`);
     const ev: TaskEvent = {
       filePath,
       fileName: "_doctor_think",
       status: "pending",
       body: "State your name and current phase. Keep it under 40 words.",
       frontmatter: { status: "pending", action: "think" },
+      document: doc,
     };
     const { ms } = await withTiming(async () => processTask(ev, watcher, pulse, store, memory));
     const content = fs.readFileSync(filePath, "utf-8");
@@ -356,12 +360,15 @@ try {
   } else {
     const filePath = join(INBOX_PATH, "_doctor_search.md");
     fs.writeFileSync(filePath, `---\nstatus: pending\naction: search\n---\n\nFrom the vault, summarize what PulseLoop does and name 2 state variables it tracks.\n`);
+    const doc = await TaskDocument.load(filePath);
+    if (!doc) throw new Error(`Failed to load task document: ${filePath}`);
     const ev: TaskEvent = {
       filePath,
       fileName: "_doctor_search",
       status: "pending",
       body: "From the vault, summarize what PulseLoop does and name 2 state variables it tracks.",
       frontmatter: { status: "pending", action: "search" },
+      document: doc,
     };
     const { ms } = await withTiming(async () => processTask(ev, watcher, pulse, store, memory));
     const content = fs.readFileSync(filePath, "utf-8");
@@ -375,12 +382,15 @@ try {
     const filePath = join(INBOX_PATH, "_doctor_chain.md");
     const next = "_doctor_chain_step2.md";
     fs.writeFileSync(filePath, `---\nstatus: pending\naction: chain\nchain_next: ${next}\n---\n\nStep 1: List exactly 3 subsystems of GZMO.\n`);
+    const doc = await TaskDocument.load(filePath);
+    if (!doc) throw new Error(`Failed to load task document: ${filePath}`);
     const ev: TaskEvent = {
       filePath,
       fileName: "_doctor_chain",
       status: "pending",
       body: "Step 1: List exactly 3 subsystems of GZMO.",
       frontmatter: { status: "pending", action: "chain", chain_next: next },
+      document: doc,
     };
     const { ms } = await withTiming(async () => processTask(ev, watcher, pulse, store, memory));
     const chainCreated = fs.existsSync(join(INBOX_PATH, next));

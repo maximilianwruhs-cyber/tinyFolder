@@ -1,6 +1,6 @@
 import { join, basename } from "path";
 import { readdirSync } from "fs";
-import { parseTask } from "./src/frontmatter";
+import { TaskDocument } from "./src/frontmatter";
 import { processTask } from "./src/engine";
 import { EmbeddingsQueue } from "./src/embeddings_queue";
 
@@ -37,18 +37,19 @@ async function main() {
   const watcher = new NoopWatcher() as any;
   for (const f of files) {
     const abs = join(inboxAbs, f);
-    const parsed = await parseTask(abs);
-    if (!parsed) continue;
-    if (String(parsed.frontmatter.status ?? "").toLowerCase() !== "pending") continue;
+    const doc = await TaskDocument.load(abs);
+    if (!doc) continue;
+    if (String(doc.frontmatter.status ?? "").toLowerCase() !== "pending") continue;
 
     console.log(`[proof_deep] running ${f}`);
     await processTask(
       {
         filePath: abs,
         fileName: basename(f, ".md"),
-        status: parsed.frontmatter.status as any,
-        body: parsed.body,
-        frontmatter: parsed.frontmatter as any,
+        status: doc.status as any,
+        body: doc.body,
+        frontmatter: doc.frontmatter as any,
+        document: doc,
       },
       watcher,
       undefined,

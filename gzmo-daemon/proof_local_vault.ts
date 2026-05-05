@@ -4,6 +4,7 @@ import { processTask } from "./src/engine";
 import type { TaskEvent, VaultWatcher } from "./src/watcher";
 import type { EmbeddingStore } from "./src/embeddings";
 import { syncEmbeddings } from "./src/embeddings";
+import { TaskDocument } from "./src/frontmatter";
 
 async function ollamaReady(base: string): Promise<boolean> {
   try {
@@ -82,6 +83,8 @@ async function run(): Promise<void> {
   ].join("\n");
 
   await Bun.write(filePath, task);
+  const doc = await TaskDocument.load(filePath);
+  if (!doc) throw new Error(`Failed to load proof task document: ${filePath}`);
 
   const event: TaskEvent = {
     filePath,
@@ -89,6 +92,7 @@ async function run(): Promise<void> {
     status: "pending",
     body: "Where does the daemon write `TELEMETRY.json` in this vault, and what is it used for?",
     frontmatter: { status: "pending", action: "search", title: "Proof: smartness & finesse" },
+    document: doc,
   };
 
   const watcher = makeWatcherStub();

@@ -24,6 +24,7 @@ import { TaskMemory } from "./src/memory";
 import type { ChaosSnapshot } from "./src/types";
 import type { TaskEvent } from "./src/watcher";
 import type { EmbeddingStore } from "./src/embeddings";
+import { TaskDocument } from "./src/frontmatter";
 
 const VAULT_PATH = process.env.VAULT_PATH ?? resolve(import.meta.dir, "../../Obsidian_Vault");
 const INBOX_PATH = join(VAULT_PATH, "GZMO", "Inbox");
@@ -102,12 +103,15 @@ fs.writeFileSync(thinkFile, `---\nstatus: pending\naction: think\n---\n\nGZMO, s
 
 const t1 = Date.now();
 try {
+  const thinkDoc = await TaskDocument.load(thinkFile);
+  if (!thinkDoc) throw new Error(`Failed to load task document: ${thinkFile}`);
   const event: TaskEvent = {
     filePath: thinkFile,
     fileName: "_test_think",
     status: "pending",
     body: "GZMO, state your identity and current chaos state. Be concise.",
     frontmatter: { status: "pending", action: "think" },
+    document: thinkDoc,
   };
   await processTask(event, watcher, pulse, store, memory);
   const elapsed = Date.now() - t1;
@@ -143,12 +147,15 @@ fs.writeFileSync(searchFile, `---\nstatus: pending\naction: search\n---\n\nWhat 
 
 const t2 = Date.now();
 try {
+  const searchDoc = await TaskDocument.load(searchFile);
+  if (!searchDoc) throw new Error(`Failed to load task document: ${searchFile}`);
   const event: TaskEvent = {
     filePath: searchFile,
     fileName: "_test_search",
     status: "pending",
     body: "What do you know about the chaos engine and allostasis system?",
     frontmatter: { status: "pending", action: "search" },
+    document: searchDoc,
   };
   await processTask(event, watcher, pulse, store, memory);
   const elapsed = Date.now() - t2;
