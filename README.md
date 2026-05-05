@@ -45,7 +45,7 @@ bun install
 3) Point the daemon at your vault:
 
 ```bash
-cat > .env <<'EOF'
+cat > gzmo-daemon/.env <<'EOF'
 VAULT_PATH="/absolute/path/to/your/vault"
 OLLAMA_URL="http://localhost:11434"
 OLLAMA_MODEL="hermes3:8b"
@@ -132,6 +132,9 @@ Notes:
 
 - This wrapper delegates to the daemon’s deeper doctor (`cd gzmo-daemon && bun run doctor …`) after doing fast system checks.
 - `--write` is supported but **not recommended** unless you intentionally want write-enabled checks.
+- `bun run doctor` writes reports to:
+  - `"$VAULT_PATH/GZMO/doctor-report.md"` and `"$VAULT_PATH/GZMO/doctor-report.json"` (when vault-writing checks run)
+  - `./gzmo/doctor-report.md` and `./gzmo/doctor-report.json` in the repo (gitignored)
 
 ---
 
