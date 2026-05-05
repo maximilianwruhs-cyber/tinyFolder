@@ -1,4 +1,6 @@
 import { safeAppendJsonl } from "./vault_fs";
+import { promises as fsp } from "fs";
+import * as path from "path";
 
 export type HoneypotEdgeStrategy = "gap_detective" | "spaced_repetition";
 
@@ -19,6 +21,9 @@ export interface HoneypotEdgeCandidate {
     cabinet_file?: string;
     related_files?: string[]; // basenames
   };
+  // L.I.N.C. validation metadata (populated by linc_filter.ts)
+  linc_score?: number;        // 0..1 composite from 4-gate validation
+  linc_violations?: string[]; // human-readable validation failures
 }
 
 export const HONEYPOT_EDGES_JSONL = "GZMO/Thought_Cabinet/honeypots/edges.jsonl";
@@ -100,7 +105,41 @@ export function extractEdgeCandidate(params: {
   };
 }
 
-export async function appendEdgeCandidate(vaultPath: string, edge: HoneypotEdgeCandidate): Promise<void> {
-  await safeAppendJsonl(vaultPath, HONEYPOT_EDGES_JSONL, edge);
+export interface EdgeStore {
+  append(edge: HoneypotEdgeCandidate): Promise<void>;
+  readAll(): Promise<HoneypotEdgeCandidate[]>;
+}
+
+export class JsonlEdgeStore implements EdgeStore {
+  private vaultPath: string;
+
+  constructor(vaultPath: string) {
+    this.vaultPath = vaultPath;
+  }
+
+  async append(edge: HoneypotEdgeCandidate): Promise<void> {
+    await safeAppendJsonl(this.vaultPath, HONEYPOT_EDGES_JSONL, edge);
+  }
+
+  async readAll(): Promise<HoneypotEdgeCandidate[]> {
+    try {
+      const fullPath = path.join(this.vaultPath, HONEYPOT_EDGES_JSONL);
+      const raw = await fsp.readFile(fullPath, "utf-8");
+      const edges: HoneypotEdgeCandidate[] = [];
+      for (const line of raw.split("\n")) {
+        const l = line.trim();
+        if (!l) continue;
+        try {
+          const obj = JSON.parse(l);
+          if (obj?.type === "honeypot_edge_candidate") edges.push(obj as HoneypotEdgeCandidate);
+        } catch {
+          continue;
+        }
+      }
+      return edges;
+    } catch {
+      return [];
+    }
+  }
 }
 

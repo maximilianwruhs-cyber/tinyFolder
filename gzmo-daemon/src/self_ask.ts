@@ -33,7 +33,8 @@ import { compileEvidencePacket, renderEvidencePacket, type EvidencePacket } from
 import { selfEvalAndRewrite } from "./self_eval";
 import { verifySafety } from "./verifier_safety";
 import { scoreSelfAskOutput } from "./self_ask_quality";
-import { appendEdgeCandidate, extractEdgeCandidate } from "./honeypot_edges";
+import { extractEdgeCandidate, type EdgeStore } from "./honeypot_edges";
+import { validateEdgeCandidate } from "./linc_filter";
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "hermes3:8b";
@@ -148,10 +149,12 @@ const CFD_SPACED_SYSTEM = `CONSTRAINTS:
 export class SelfAskEngine {
   private vaultPath: string;
   private honeypotDir: string;
+  private edgeStore: EdgeStore;
   private taskCount = 0;
 
-  constructor(vaultPath: string) {
+  constructor(vaultPath: string, edgeStore: EdgeStore) {
     this.vaultPath = vaultPath;
+    this.edgeStore = edgeStore;
     this.honeypotDir = path.join(vaultPath, HONEYPOT_DIR);
     try { mkdirSync(this.honeypotDir, { recursive: true }); } catch {}
   }
@@ -628,7 +631,25 @@ export class SelfAskEngine {
         cabinetFile: filename,
       });
       if (edge) {
-        await appendEdgeCandidate(this.vaultPath, edge).catch(() => {});
+        // L.I.N.C. validation: score edge before emission.
+        // Hybrid gate: hard reject <0.3 (noise), soft score 0.3+ flows to promotion.
+        const lincEnabled = String(process.env.GZMO_LINC_FILTER ?? "on").toLowerCase() !== "off";
+        if (lincEnabled) {
+          const linc = validateEdgeCandidate(edge);
+          edge.linc_score = linc.score;
+          edge.linc_violations = linc.violations;
+          if (!linc.valid || linc.score < 0.3) {
+            console.log(`[LINC] Rejected edge ${edge.from}→${edge.to} (score=${linc.score.toFixed(2)}): ${linc.violations.join("; ")}`);
+          } else {
+            if (linc.adjustedConfidence !== undefined) {
+              edge.confidence = linc.adjustedConfidence;
+            }
+            await this.edgeStore.append(edge).catch(() => {});
+            console.log(`[LINC] Accepted edge ${edge.from}→${edge.to} (score=${linc.score.toFixed(2)})`);
+          }
+        } else {
+          await this.edgeStore.append(edge).catch(() => {});
+        }
       }
     }
 

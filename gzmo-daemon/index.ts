@@ -21,6 +21,7 @@ import { processTask, infer } from "./src/engine";
 import { LiveStream } from "./src/stream";
 import { PulseLoop } from "./src/pulse";
 import { DreamEngine } from "./src/dreams";
+import { JsonlEdgeStore } from "./src/honeypot_edges";
 import { SelfAskEngine } from "./src/self_ask";
 import { PruningEngine } from "./src/prune";
 import { WikiEngine } from "./src/wiki_engine";
@@ -392,7 +393,8 @@ setInterval(async () => {
 
 // ── Initialize Dream Engine ────────────────────────────────
 const dreams = new DreamEngine(VAULT_PATH);
-const honeypotPromotion = new HoneypotPromotionEngine(VAULT_PATH);
+const edgeStore = new JsonlEdgeStore(VAULT_PATH);
+const honeypotPromotion = new HoneypotPromotionEngine(VAULT_PATH, edgeStore);
 
 // Dream cycle: chaos-responsive interval (15-45min depending on tension)
 const DREAM_BASE_MS = 30 * 60 * 1000;
@@ -466,7 +468,8 @@ setInterval(async () => {
 }, 60_000);
 
 // ── Initialize Self-Ask Engine ─────────────────────────────
-const selfAsk = new SelfAskEngine(VAULT_PATH);
+const selfAskEdgeStore = new JsonlEdgeStore(VAULT_PATH);
+const selfAsk = new SelfAskEngine(VAULT_PATH, selfAskEdgeStore);
 
 // Self-Ask cycle: chaos-responsive (1-3h depending on energy)
 const SELFASK_BASE_MS = 2 * 60 * 60 * 1000;

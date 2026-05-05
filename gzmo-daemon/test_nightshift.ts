@@ -10,6 +10,7 @@
 import { resolve, join } from "path";
 import { DreamEngine } from "./src/dreams";
 import { SelfAskEngine } from "./src/self_ask";
+import { JsonlEdgeStore } from "./src/honeypot_edges";
 import { infer } from "./src/engine";
 import { PulseLoop } from "./src/pulse";
 import { syncEmbeddings } from "./src/embeddings";
@@ -81,7 +82,8 @@ console.log("  TEST 2: Self-Ask Engine (qwen3:4b)");
 console.log("═══════════════════════════════════════════════");
 
 if (store) {
-  const selfAsk = new SelfAskEngine(VAULT_PATH);
+  const selfAskEdgeStore = new JsonlEdgeStore(VAULT_PATH);
+  const selfAsk = new SelfAskEngine(VAULT_PATH, selfAskEdgeStore);
   const t2 = Date.now();
   try {
     const results = await selfAsk.cycle(calmSnap, store, OLLAMA_API_URL, infer);

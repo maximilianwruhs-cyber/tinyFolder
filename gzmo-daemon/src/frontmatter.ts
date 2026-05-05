@@ -10,6 +10,7 @@
  */
 
 import matter from "gray-matter";
+import { write } from "bun";
 
 export type TaskStatus = "pending" | "processing" | "completed" | "failed" | "cancelled";
 
@@ -21,63 +22,71 @@ export interface TaskFrontmatter {
   [key: string]: unknown;
 }
 
-export interface ParsedTask {
-  frontmatter: TaskFrontmatter;
-  body: string;
-  rawContent: string;
-}
+// Removed ParsedTask interface
 
-/**
- * Parse a markdown file and extract its frontmatter + body.
- * Returns null if the file has no valid frontmatter.
- */
-export async function parseTask(filePath: string): Promise<ParsedTask | null> {
-  try {
-    const raw = await Bun.file(filePath).text();
-    const parsed = matter(raw);
+export class TaskDocument {
+  private constructor(
+    public readonly filePath: string,
+    public frontmatter: TaskFrontmatter,
+    public body: string,
+    public rawContent: string
+  ) {}
 
-    if (!parsed.data || typeof parsed.data.status !== "string") {
-      return null; // Not a valid task file
+  static async load(filePath: string): Promise<TaskDocument | null> {
+    try {
+      const raw = await Bun.file(filePath).text();
+      const parsed = matter(raw);
+
+      if (!parsed.data || typeof parsed.data.status !== "string") {
+        return null;
+      }
+
+      return new TaskDocument(
+        filePath,
+        parsed.data as TaskFrontmatter,
+        parsed.content.trim(),
+        raw
+      );
+    } catch {
+      return null;
     }
+  }
 
-    return {
-      frontmatter: parsed.data as TaskFrontmatter,
-      body: parsed.content.trim(),
-      rawContent: raw,
-    };
-  } catch {
-    return null;
+  get status(): TaskStatus {
+    return this.frontmatter.status;
+  }
+
+  get action(): string | undefined {
+    return this.frontmatter.action as string | undefined;
+  }
+
+  async markProcessing(): Promise<void> {
+    this.frontmatter.status = "processing";
+    this.frontmatter.started_at = new Date().toISOString();
+    await this.save();
+  }
+
+  async markCompleted(output: string): Promise<void> {
+    this.frontmatter.status = "completed";
+    this.frontmatter.completed_at = new Date().toISOString();
+    // Append the output cleanly
+    this.body = this.body.trimEnd() + "\n" + output;
+    await this.save();
+  }
+
+  async markFailed(errorMessage: string): Promise<void> {
+    this.frontmatter.status = "failed";
+    this.frontmatter.completed_at = new Date().toISOString();
+    const formattedError = `\n---\n\n## ❌ Error\n\`\`\`\n${errorMessage}\n\`\`\``;
+    this.body = this.body.trimEnd() + "\n" + formattedError;
+    await this.save();
+  }
+
+  private async save(): Promise<void> {
+    const output = matter.stringify(this.body, this.frontmatter);
+    await write(this.filePath, output);
+    this.rawContent = output;
   }
 }
 
-/**
- * Update the frontmatter of a task file without touching the body.
- * Uses gray-matter's stringify for lossless round-trip.
- */
-export async function updateFrontmatter(
-  filePath: string,
-  updates: Partial<TaskFrontmatter>
-): Promise<void> {
-  const raw = await Bun.file(filePath).text();
-  const parsed = matter(raw);
-
-  // Merge updates into existing frontmatter
-  const merged = { ...parsed.data, ...updates };
-
-  // Reconstruct file: gray-matter.stringify preserves body exactly
-  const output = matter.stringify(parsed.content, merged);
-  await Bun.write(filePath, output);
-}
-
-/**
- * Append markdown content to the end of a task file,
- * preserving the frontmatter and existing body intact.
- */
-export async function appendToTask(filePath: string, content: string): Promise<void> {
-  const raw = await Bun.file(filePath).text();
-  const parsed = matter(raw);
-
-  const newBody = parsed.content.trimEnd() + "\n" + content;
-  const output = matter.stringify(newBody, parsed.data);
-  await Bun.write(filePath, output);
-}
+// EOF

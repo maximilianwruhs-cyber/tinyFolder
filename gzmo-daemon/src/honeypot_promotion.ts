@@ -1,8 +1,9 @@
 import { safeWriteText } from "./vault_fs";
-import { HONEYPOT_EDGES_JSONL, type HoneypotEdgeCandidate } from "./honeypot_edges";
+import { type EdgeStore, type HoneypotEdgeCandidate } from "./honeypot_edges";
 import { slugifyTitle, writeHoneypotNode, type HoneypotNode } from "./honeypot_nodes";
 import { updateExecutableMasterIndex } from "./executable_master_index";
 import { readCoreWisdomRouting } from "./core_wisdom";
+import { validateEdgeCandidate } from "./linc_filter";
 
 interface HoneypotDigest {
   promotedPairs: Record<string, { nodeSlug: string; promoted_at: string }>;
@@ -40,11 +41,13 @@ function pairKey(a: string, b: string): string {
 
 export class HoneypotPromotionEngine {
   private vaultPath: string;
+  private edgeStore: EdgeStore;
   private digest: HoneypotDigest = { promotedPairs: {}, lastRun: "" };
   private digestLoaded = false;
 
-  constructor(vaultPath: string) {
+  constructor(vaultPath: string, edgeStore: EdgeStore) {
     this.vaultPath = vaultPath;
+    this.edgeStore = edgeStore;
   }
 
   private async ensureDigest(): Promise<void> {
@@ -87,25 +90,13 @@ export class HoneypotPromotionEngine {
 
     const cutoff = Date.now() - windowHours * 60 * 60 * 1000;
 
-    let raw = "";
+    let edges: HoneypotEdgeCandidate[] = [];
     try {
-      raw = await Bun.file(`${this.vaultPath}/${HONEYPOT_EDGES_JSONL}`).text();
+      edges = await this.edgeStore.readAll();
     } catch {
       this.digest.lastRun = new Date().toISOString();
       await this.saveDigest();
       return { promoted: 0, nodes: [] };
-    }
-
-    const edges: HoneypotEdgeCandidate[] = [];
-    for (const line of raw.split("\n")) {
-      const l = line.trim();
-      if (!l) continue;
-      try {
-        const obj = JSON.parse(l);
-        if (obj?.type === "honeypot_edge_candidate") edges.push(obj as HoneypotEdgeCandidate);
-      } catch {
-        continue;
-      }
     }
 
     const recent = edges.filter((e) => isoToMs(e.created_at) >= cutoff);
@@ -115,9 +106,32 @@ export class HoneypotPromotionEngine {
       return { promoted: 0, nodes: [] };
     }
 
+    // Filter by L.I.N.C. if available: drop edges with linc_score below threshold.
+    const lincMinScore = readFloatEnv("GZMO_HONEYPOT_LINC_MIN", 0.5, 0.0, 1.0);
+    const lincEnabled = String(process.env.GZMO_LINC_FILTER ?? "on").toLowerCase() !== "off";
+    const lincFiltered = lincEnabled
+      ? recent.filter((e) => {
+          // If edge already has linc_score from self_ask emission, use it.
+          // Otherwise, validate on-the-fly (handles legacy edges without scores).
+          if (e.linc_score === undefined) {
+            const v = validateEdgeCandidate(e);
+            e.linc_score = v.score;
+            e.linc_violations = v.violations;
+          }
+          return (e.linc_score ?? 0) >= lincMinScore;
+        })
+      : recent;
+
+    if (lincFiltered.length === 0) {
+      console.log(`[LINC-PROMOTION] All ${recent.length} edges filtered (threshold=${lincMinScore})`);
+      this.digest.lastRun = new Date().toISOString();
+      await this.saveDigest();
+      return { promoted: 0, nodes: [] };
+    }
+
     // Cluster heuristic v0: group by unordered node pair.
     const clusters = new Map<string, HoneypotEdgeCandidate[]>();
-    for (const e of recent) {
+    for (const e of lincFiltered) {
       const key = pairKey(e.from, e.to);
       if (!clusters.has(key)) clusters.set(key, []);
       clusters.get(key)!.push(e);
@@ -125,8 +139,11 @@ export class HoneypotPromotionEngine {
 
     const scored = [...clusters.entries()].map(([key, es]) => {
       const avg = es.reduce((a, b) => a + (Number(b.confidence) || 0), 0) / Math.max(1, es.length);
+      // Factor in L.I.N.C. scores: weighted blend of confidence and linc_score.
+      const avgLinc = es.reduce((a, b) => a + (Number(b.linc_score) || 0), 0) / Math.max(1, es.length);
+      const compositeScore = avg * 0.6 + avgLinc * 0.4; // 60% confidence, 40% LINC quality
       const cabinetFiles = new Set(es.map((x) => x.source_refs?.cabinet_file).filter(Boolean) as string[]);
-      return { key, edges: es, avgConfidence: avg, sourceCount: cabinetFiles.size, edgeCount: es.length };
+      return { key, edges: es, avgConfidence: compositeScore, sourceCount: cabinetFiles.size, edgeCount: es.length };
     })
       .filter((c) => c.edgeCount >= kEdges && c.sourceCount >= mSources && c.avgConfidence >= qConfidence)
       .sort((a, b) => (b.edgeCount - a.edgeCount) || (b.avgConfidence - a.avgConfidence));

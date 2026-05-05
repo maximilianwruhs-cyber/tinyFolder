@@ -31,6 +31,7 @@ import { VaultWatcher } from "./src/watcher";
 import { PulseLoop } from "./src/pulse";
 import { DreamEngine } from "./src/dreams";
 import { SelfAskEngine } from "./src/self_ask";
+import { JsonlEdgeStore } from "./src/honeypot_edges";
 import { WikiEngine } from "./src/wiki_engine";
 import { syncEmbeddings } from "./src/embeddings";
 import { TaskMemory } from "./src/memory";
@@ -403,7 +404,8 @@ try {
     }
 
     {
-      const selfAsk = new SelfAskEngine(VAULT_PATH);
+      const selfAskEdgeStore = new JsonlEdgeStore(VAULT_PATH);
+      const selfAsk = new SelfAskEngine(VAULT_PATH, selfAskEdgeStore);
       const { ms, value } = await withTiming(async () => selfAsk.cycle(calmSnap, store!, OLLAMA_API_URL, infer));
       const bad = value.filter(r => gradeOutput(r.output).quality === "BAD");
       steps.push(bad.length === 0 ? ok("SelfAskEngine.cycle", ms, `strategies=${value.length}`) : warn("SelfAskEngine.cycle", ms, `bad=${bad.length}/${value.length}`));

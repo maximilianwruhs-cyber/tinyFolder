@@ -11,7 +11,7 @@ function rx(pattern: string): RegExp {
 export const GUIDANCE_CONTRACTS: GuidanceSurfaceContract[] = [
   {
     id: "engine-grounding-rules",
-    path: "src/engine.ts",
+    path: "src/pipelines/helpers.ts",
     requiredPatterns: [
       rx("Grounding rules \\(when context is provided\\):"),
       rx("Treat the 'Evidence Packet' as the only allowed evidence source"),

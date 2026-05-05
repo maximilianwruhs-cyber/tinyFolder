@@ -18,6 +18,7 @@ import { resolve, join, basename } from "path";
 import { readFileSync, writeFileSync, unlinkSync, existsSync, readdirSync } from "fs";
 import { DreamEngine } from "./src/dreams";
 import { SelfAskEngine } from "./src/self_ask";
+import { JsonlEdgeStore } from "./src/honeypot_edges";
 import { WikiEngine } from "./src/wiki_engine";
 import { processTask, infer } from "./src/engine";
 import { VaultWatcher } from "./src/watcher";
@@ -359,7 +360,8 @@ console.log("  TEST 6/8: Self-Ask Engine (All Strategies)");
 console.log("═══════════════════════════════════════════════════════════");
 
 if (store) {
-  const selfAsk = new SelfAskEngine(VAULT_PATH);
+  const selfAskEdgeStore = new JsonlEdgeStore(VAULT_PATH);
+  const selfAsk = new SelfAskEngine(VAULT_PATH, selfAskEdgeStore);
   const t6Start = Date.now();
   try {
     const saResults = await selfAsk.cycle(calmSnap, store, OLLAMA_API_URL, infer);

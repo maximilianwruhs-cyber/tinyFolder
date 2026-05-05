@@ -6,7 +6,7 @@
  */
 
 import { watch, type FSWatcher } from "chokidar";
-import { parseTask, type TaskStatus } from "./frontmatter";
+import { TaskDocument, type TaskStatus } from "./frontmatter";
 import { EventEmitter } from "events";
 import { basename } from "path";
 
@@ -16,6 +16,7 @@ export interface TaskEvent {
   status: TaskStatus;
   body: string;
   frontmatter: Record<string, unknown>;
+  document: TaskDocument; // The new deep abstraction
 }
 
 export class VaultWatcher extends EventEmitter {
@@ -76,18 +77,19 @@ export class VaultWatcher extends EventEmitter {
   }
 
   private async processFile(filePath: string): Promise<void> {
-    const task = await parseTask(filePath);
+    const task = await TaskDocument.load(filePath);
     if (!task) return;
 
     // Only dispatch tasks that are waiting to be processed
-    if (task.frontmatter.status !== "pending") return;
+    if (task.status !== "pending") return;
 
     const event: TaskEvent = {
       filePath,
       fileName: basename(filePath, ".md"),
-      status: task.frontmatter.status,
+      status: task.status,
       body: task.body,
       frontmatter: task.frontmatter as Record<string, unknown>,
+      document: task,
     };
 
     console.log(`[WATCHER] New task detected: ${event.fileName}`);
