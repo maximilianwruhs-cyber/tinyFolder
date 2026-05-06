@@ -230,10 +230,11 @@ mkdir -p "/absolute/path/to/your/vault/GZMO/Inbox"
 mkdir -p "/absolute/path/to/your/vault/GZMO/Subtasks"
 mkdir -p "/absolute/path/to/your/vault/GZMO/Thought_Cabinet"
 mkdir -p "/absolute/path/to/your/vault/GZMO/Quarantine"
+mkdir -p "/absolute/path/to/your/vault/GZMO/Reasoning_Traces"
 mkdir -p "/absolute/path/to/your/vault/wiki"
 ```
 
-Note: the daemon also creates some directories on boot if missing, but **do not rely on that** when automating setup—create the scaffold explicitly.
+Note: the daemon also creates some directories on boot if missing, but **do not rely on that** when automating setup—create the scaffold explicitly. `GZMO/Reasoning_Traces/` is optional (used when `GZMO_ENABLE_TRACES` is on).
 
 ---
 
@@ -302,6 +303,30 @@ Most subsystems can be disabled (all accept `true/false/1/0`):
 - `GZMO_ENABLE_WIKI_LINT`
 - `GZMO_ENABLE_PRUNING`
 - `GZMO_ENABLE_DASHBOARD_PULSE`
+
+### Reasoning engine (optional)
+
+Structured traces, filesystem tools, Tree-of-Thought search, and cross-task claims are **off by default** except traces.
+
+- **`GZMO_ENABLE_TRACES`**: `on|off` — write JSON traces under `GZMO/Reasoning_Traces/` (default: `on`)
+- **`GZMO_ENABLE_TOOLS`**: `on|off` — when retrieval returns nothing, run deterministic `fs_grep` (and registry tools for ToT) (default: `off`)
+- **`GZMO_MAX_TOOL_CALLS`**: integer — cap tool invocations per task (default: `3`)
+- **`GZMO_ENABLE_TOT`**: `on|off` — `action:search` uses multi-step ToT plus shadow-judge scoring (requires embeddings store; default: `off`)
+- **`GZMO_TOT_BEAM`**: `on|off` — expand retrieval branches in priority waves (beam) instead of one sorted pass; optional (default: `off`)
+- **`GZMO_TOT_MAX_NODES`**, **`GZMO_TOT_MIN_SCORE`**: ToT budget / pruning (defaults: `15`, `0.5`)
+- **`GZMO_ENABLE_BELIEFS`**: `on|off` — append claims to `GZMO/Reasoning_Traces/claims.jsonl` (default: `off`)
+- **`GZMO_ENABLE_LEARNING`**: `on|off` — append task outcomes to `GZMO/strategy_ledger.jsonl` and inject strategy tips into prompts when enough history exists (default: `off`)
+- **`GZMO_LEARNING_BACKFILL`**: `on|off` — on daemon boot (after embeddings init), append ledger rows from existing `GZMO/perf.jsonl` (default: `off`)
+- **`GZMO_ENABLE_TRACE_MEMORY`**: `on|off` — embed past traces into the store at boot and retrieve similar traces before ToT decomposition (default: `off`)
+- **`GZMO_ENABLE_GATES`**: `on|off` — analyze / retrieve / reason gates in the ToT pipeline (default: `off`)
+- **`GZMO_ENABLE_CRITIQUE`**: `on|off` — on total ToT failure, run a critique pass and optionally one replan wave (default: `off`)
+- **`GZMO_ENABLE_MODEL_ROUTING`**: `on|off` — route ToT LLM calls by role (`fast` / `reason` / `judge`) (default: `off`)
+- **`GZMO_FAST_MODEL`**, **`GZMO_REASON_MODEL`**, **`GZMO_JUDGE_MODEL`**: Ollama model tags when routing is on (reason/judge fall back to `OLLAMA_MODEL` when unset)
+- **`GZMO_ENABLE_TOOL_CHAINING`**: `on|off` — allow follow-up `vault_read` / `dir_list` calls inferred from prior tool output, still capped by `GZMO_MAX_TOOL_CALLS` (default: `off`)
+
+View a trace (from `gzmo-daemon/` with `VAULT_PATH` set): `bun run trace:view -- <trace_id_or_task_file>` — add `--thinking` to print stored model thinking snippets.
+
+Ledger report: `bun run ledger:analyze` — sync traces into embeddings without full daemon boot: `bun run trace:sync`.
 
 ---
 
@@ -470,6 +495,7 @@ High-signal files (examples; depends on enabled subsystems):
 - `GZMO/rag-quality.md` + `GZMO/retrieval-metrics.json` — eval harness outputs
 - `GZMO/anchor-index.json` + `GZMO/anchor-report.md` — anchor artifacts
 - `GZMO/self-ask-quality.md` — self-ask quality report
+- `GZMO/Reasoning_Traces/` — per-task reasoning traces (`*.json`), optional `index.jsonl` and `claims.jsonl`
 
 Important operational invariant:
 - **Vault `docs/**` is excluded from default retrieval** unless explicitly referenced (keeps “human docs” from polluting RAG by default).
