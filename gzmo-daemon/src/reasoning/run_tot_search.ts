@@ -20,6 +20,7 @@ import { synthesizeToTAnswer } from "./synthesis";
 import { searchVaultHybrid } from "../search";
 import { analyzeGate, retrieveGate, reasonGate } from "./gates";
 import { generateCritique } from "./critique";
+import { classifyTaskType, computeWinningPatterns, getRecentFailureContext, buildStrategyTips, formatStrategyContext, learningEnabled, loadLedger, type StrategyInjectContext } from "../learning/ledger";
 
 const RETRY_HINT =
   "Your previous claims may have scored low on grounding. Re-examine the evidence; cite SOURCE IDs; prefer verbatim support.";
@@ -37,6 +38,7 @@ export interface RunSearchTotParams {
 export interface RunSearchTotResult {
   answer: string;
   totFlatNodes: ReasoningNode[];
+  strategyInjected?: boolean;
 }
 
 function isRetrievalNode(n: ToTNode): boolean {
@@ -92,6 +94,30 @@ export async function runSearchTot(p: RunSearchTotParams): Promise<RunSearchTotR
       .slice(0, 2);
     if (relevant.length > 0) {
       pastTraceContext = relevant.map((r) => `- ${r.heading}: ${r.text.slice(0, 200)}`).join("\n");
+    }
+  }
+
+  let strategyContext: StrategyInjectContext | undefined;
+  let strategyInjected = false;
+  if (learningEnabled()) {
+    try {
+      const ledger = await loadLedger(p.vaultRoot, 300);
+      const taskType = classifyTaskType(p.body);
+      const tips = buildStrategyTips(ledger, taskType);
+      const patterns = await computeWinningPatterns(p.vaultRoot, taskType);
+      const failureCtx = await getRecentFailureContext(p.vaultRoot, taskType);
+      const abTest = readBoolEnv("GZMO_LEARNING_AB_TEST", false);
+      const inject = !abTest || Math.random() > 0.3;
+      strategyContext = {
+        tips,
+        winningPattern: patterns[0],
+        recentFailureContext: failureCtx,
+        injected: inject,
+      };
+      if (!inject) strategyContext = undefined;
+      strategyInjected = inject;
+    } catch {
+      // ignore
     }
   }
 
@@ -325,7 +351,16 @@ export async function runSearchTot(p: RunSearchTotParams): Promise<RunSearchTotR
   const runAnalyzePhase = async (userPromptForAnalyze: string, pastCtx?: string): Promise<boolean> => {
     const r = tot.root;
     if (!r) return false;
-    const analyzeSpecs = await expandAnalyze(r, p.systemPrompt, userPromptForAnalyze, inferFast, temp, maxTok, pastCtx);
+    const analyzeSpecs = await expandAnalyze(
+      r,
+      p.systemPrompt,
+      userPromptForAnalyze,
+      inferFast,
+      temp,
+      maxTok,
+      pastCtx,
+      strategyContext,
+    );
 
     const analyzeCheck = analyzeGate(
       analyzeSpecs.map((s) => s.prompt_summary),
@@ -375,7 +410,7 @@ export async function runSearchTot(p: RunSearchTotParams): Promise<RunSearchTotR
     } else {
       answer = synthesizeToTAnswer(path, tot.allNodes, evidenceFallback).markdown;
     }
-    return { answer, totFlatNodes: tot.flattenForTrace() };
+    return { answer, totFlatNodes: tot.flattenForTrace(), strategyInjected };
   }
 
   let path = tot.bestPath();
@@ -431,5 +466,5 @@ export async function runSearchTot(p: RunSearchTotParams): Promise<RunSearchTotR
     answer = synthesizeToTAnswer(path, tot.allNodes, evidenceFallback).markdown;
   }
 
-  return { answer, totFlatNodes: tot.flattenForTrace() };
+  return { answer, totFlatNodes: tot.flattenForTrace(), strategyInjected };
 }

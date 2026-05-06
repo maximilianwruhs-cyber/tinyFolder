@@ -165,6 +165,7 @@ export async function processTask(
   const traceId = crypto.randomUUID();
   const traceNodes: ReasoningNode[] = [];
   const taskRelPath = relative(resolve(vaultRoot), resolve(filePath)).replace(/\\/g, "/");
+  let strategyInjected = false;
 
   try {
     const action = parseAction(frontmatter ?? {});
@@ -190,7 +191,10 @@ export async function processTask(
       const ledger = await loadLedger(vaultRoot, 200);
       const taskType = classifyTaskType(body);
       const tips = buildStrategyTips(ledger, taskType);
-      strategyContext = formatStrategyContext(tips);
+      const abTest = readBoolEnv("GZMO_LEARNING_AB_TEST", false);
+      const inject = !abTest || Math.random() > 0.3;
+      strategyInjected = inject;
+      strategyContext = inject ? formatStrategyContext(tips) : "";
     }
     const systemPromptWithStrategy = strategyContext ? `${ctx.systemPrompt}\n\n${strategyContext}` : ctx.systemPrompt;
 
@@ -224,6 +228,8 @@ export async function processTask(
     let inferElapsed = 0;
     const useTot = readBoolEnv("GZMO_ENABLE_TOT", false) && action === "search" && Boolean(embeddingStore);
 
+    let routeJudgeMetrics: { score: number; partValidCitationRate: number } | undefined;
+
     let rawOutput = ctx.deterministicAnswer;
     const usedDeterministic = Boolean(rawOutput);
 
@@ -241,6 +247,8 @@ export async function processTask(
       );
       rawOutput = totOut.answer;
       if (tracesEnabled()) traceNodes.push(...totOut.totFlatNodes);
+      // Prefer ToT's own strategy injection measurement when present.
+      if (typeof totOut.strategyInjected === "boolean") strategyInjected = totOut.strategyInjected;
     } else if (!usedDeterministic) {
       const inferResult = await span("llm.stream", async () =>
         inferDetailed(systemPromptWithStrategy, body, { temperature: temp, maxTokens: maxTok }),
@@ -272,6 +280,42 @@ export async function processTask(
     await span("frontmatter.completed", () => document.markCompleted(output));
 
     console.log(`[ENGINE] Completed: ${fileName} (${action})`);
+
+    // ── Knowledge Graph (optional) ───────────────────────────────
+    if (readBoolEnv("GZMO_ENABLE_KNOWLEDGE_GRAPH", false) && vaultRoot) {
+      try {
+        const { KnowledgeGraph, extractEntities } = await import("./knowledge_graph/graph");
+        const kg = KnowledgeGraph.forVault(vaultRoot);
+        await kg.init();
+
+        const sourceNodeId = kg.upsertSource(taskRelPath, { sourceFile: taskRelPath, kind: "task_file" });
+
+        const entities = extractEntities(fullText, taskRelPath);
+        for (const ent of entities) {
+          const entId = kg.upsertEntity(ent.text, {
+            entityType: ent.type,
+            sourceFile: ent.sourceFile,
+            confidence: ent.confidence,
+          });
+          kg.addEdge(sourceNodeId, entId, "mentions", ent.confidence);
+        }
+
+        // Record a compact claim node for the final answer (dedupes by content hash).
+        const claimText = String(fullText ?? "").slice(0, 500);
+        if (claimText.trim()) {
+          const conf = Math.max(0.25, Math.min(1, routeJudgeMetrics?.score ?? 0.6));
+          kg.upsertClaim(claimText, sourceNodeId, conf);
+        }
+
+        await kg.persist();
+        await kg.appendAuditEvent({
+          op: "task_completion",
+          payload: { task_file: taskRelPath, entity_count: entities.length },
+        });
+      } catch {
+        // Non-fatal (KG is optional and must never block task completion)
+      }
+    }
 
     if (!usedDeterministic && action !== "search" && ctx.state.projectAllowedPaths?.length > 0) {
       const verdict = spanSync("safety.verify.nonsearch", () => verifySafety({
@@ -320,7 +364,6 @@ export async function processTask(
 
     memory?.record(fileName, fullText);
 
-    let routeJudgeMetrics: { score: number; partValidCitationRate: number } | undefined;
     if (action === "search") {
       const evidenceMulti = ctx.state.evidenceMulti;
       if (vaultRoot) {
@@ -374,6 +417,7 @@ export async function processTask(
         citation_rate: routeJudgeMetrics?.partValidCitationRate ?? 0,
         total_ms: Date.now() - startTime,
         trace_id: traceId,
+        strategy_injected: strategyInjected,
       }).catch(() => {});
     }
 
@@ -455,6 +499,7 @@ export async function processTask(
           citation_rate: 0,
           total_ms: Date.now() - startTime,
           trace_id: traceId,
+          strategy_injected: strategyInjected,
         }).catch(() => {});
       }
     } catch {}

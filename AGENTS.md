@@ -40,20 +40,33 @@ Use [README.md — Table of contents](README.md#table-of-contents) as the canoni
 
 ---
 
-## Pi skill (optional)
+## Pi extension (auto-loaded inside repo)
 
-Use the **vendored** pack [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md) instead of ad‑hoc `~/.pi/skills/...` copies that **execute** `.env` in a subshell (those never export `VAULT_PATH` to `submit_task.sh`).
+When Pi opens the tinyFolder repo, the project extension [`.pi/extensions/gzmo-tinyfolder.ts`](.pi/extensions/gzmo-tinyfolder.ts) auto-loads. It:
 
-**Apply (agent or human):**
+- Registers **7 GZMO tools**: `gzmo_submit_task`, `gzmo_read_task`, `gzmo_watch_task`, `gzmo_query_context`, `gzmo_list_tasks`, `gzmo_last_tasks`, `gzmo_health`.
+- Registers **`resources_discover`** so Pi auto-discovers the bundled skill at [`.pi/extensions/skills/gzmo-daemon/`](.pi/extensions/skills/gzmo-daemon/) — **no manual install** in `~/.pi/skills/` needed.
+- Provides **ambient inbox status** via `before_agent_start` injection, plus a live widget/status bar.
+- Exposes `/gzmo` (dashboard) and `/gzmo-last [N]` commands.
 
-1. `REPO=/absolute/path/to/tinyFolder`
-2. `mkdir -p ~/.pi/skills/gzmo-daemon/scripts`
-3. `cp "$REPO/contrib/pi-gzmo-skill/SKILL.md" "$REPO/contrib/pi-gzmo-skill/README.md" ~/.pi/skills/gzmo-daemon/`
-4. `cp "$REPO/contrib/pi-gzmo-skill/scripts/"*.sh ~/.pi/skills/gzmo-daemon/scripts/`
-5. `chmod +x ~/.pi/skills/gzmo-daemon/scripts/*.sh`
-6. `export GZMO_ENV_FILE="$REPO/gzmo-daemon/.env"` (recommended), **or** run scripts with `cwd` under `$REPO` so `gzmo-daemon/.env` is discovered.
+**Environment:** same resolution as before (`GZMO_ENV_FILE` → `VAULT_PATH` → walk for `.env`). `VAULT_PATH` must be absolute.
 
-**Usage:** `submit_task.sh think|search "body"` · `submit_task.sh chain next.md "body"` · `watch_task.sh /path/to/task.md`. Contract matches [Submit tasks](README.md#submit-tasks-inbox-contract).
+## Shell / CI / non‑Pi fallback
+
+If you need plain shell scripts (no Pi), use the **vendored** pack [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md). It includes `submit_task.sh`, `watch_task.sh`, and `resolve_env.sh`.
+
+Install into `~/.pi/skills/gzmo-daemon` **only if** you want the shell helpers visible in Pi's global skills tree alongside other skills (the bundled skill is already auto-loaded by the extension when in this repo):
+
+```bash
+REPO=/absolute/path/to/tinyFolder
+mkdir -p ~/.pi/skills/gzmo-daemon/scripts
+cp "$REPO/contrib/pi-gzmo-skill/"{SKILL.md,README.md} ~/.pi/skills/gzmo-daemon/
+cp "$REPO/contrib/pi-gzmo-skill/scripts/"*.sh ~/.pi/skills/gzmo-daemon/scripts/
+chmod +x ~/.pi/skills/gzmo-daemon/scripts/*.sh
+export GZMO_ENV_FILE="$REPO/gzmo-daemon/.env"
+```
+
+**Shell usage:** `submit_task.sh think|search "body"` · `submit_task.sh chain next.md "body"` · `watch_task.sh /path/to/task.md`. Contract matches [Submit tasks](README.md#submit-tasks-inbox-contract).
 
 ---
 
@@ -90,7 +103,7 @@ Use the **vendored** pack [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/READM
 
 ### E. Pi or shell helpers for the inbox
 
-1. [Pi skill (optional)](README.md#pi-skill-optional) — install `contrib/pi-gzmo-skill` into `~/.pi/skills/gzmo-daemon`, set `GZMO_ENV_FILE`, run `submit_task.sh` / `watch_task.sh`.
+1. [Pi skill (optional)](README.md#pi-skill-optional) — with the repo extension active, the GZMO skill loads from `.pi/extensions/skills/`; otherwise install `contrib/pi-gzmo-skill` into `~/.pi/skills/gzmo-daemon` for shell helpers, set `GZMO_ENV_FILE`, run `submit_task.sh` / `watch_task.sh`.
 
 ---
 

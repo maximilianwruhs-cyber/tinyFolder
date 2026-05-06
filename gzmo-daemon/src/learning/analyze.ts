@@ -11,6 +11,7 @@ import type { StrategyEntry } from "./ledger";
 interface LedgerReport {
   total: number;
   perTaskType: Record<string, { count: number; avgZ: number; bestStyle: string }>;
+  ab?: { injected: { n: number; avgZ: number }; control: { n: number; avgZ: number } };
   tips: string[];
 }
 
@@ -49,8 +50,23 @@ async function main() {
   const report: LedgerReport = {
     total: entries.length,
     perTaskType: perType,
+    ab: undefined,
     tips: [],
   };
+
+  const injected = entries.filter((e) => e.strategy_injected === true);
+  const control = entries.filter((e) => e.strategy_injected === false);
+  if (injected.length + control.length > 0) {
+    const avg = (xs: StrategyEntry[]) => {
+      const vals = xs.map((e) => e.z_score).filter((z) => Number.isFinite(z));
+      if (vals.length === 0) return 0;
+      return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100;
+    };
+    report.ab = {
+      injected: { n: injected.length, avgZ: avg(injected) },
+      control: { n: control.length, avgZ: avg(control) },
+    };
+  }
 
   for (const [type, p] of Object.entries(perType)) {
     if (p.count < 3) continue;

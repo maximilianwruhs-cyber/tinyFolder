@@ -21,6 +21,72 @@ import { safeAppendJsonl, atomicWriteJson } from "../vault_fs";
 
 export type KgNodeType = "entity" | "claim" | "source" | "session" | "hypothesis" | "query";
 
+export interface ExtractedEntity {
+  text: string;
+  type: "person" | "organization" | "concept" | "file" | "code_symbol";
+  confidence: number; // 0..1
+  sourceFile: string;
+  span: { start: number; end: number };
+}
+
+/**
+ * Extract entities from an answer using lightweight, deterministic heuristics.
+ *
+ * Intentionally no LLM calls: this must be safe to run on every task completion.
+ */
+export function extractEntities(answer: string, sourceFile: string): ExtractedEntity[] {
+  const text = String(answer ?? "");
+  const entities: ExtractedEntity[] = [];
+
+  // File references: backticked or bare relative paths with common extensions.
+  const fileRefs = [...text.matchAll(/`?([\w\-./]+\.(?:md|ts|tsx|js|json))`?/g)];
+  for (const m of fileRefs) {
+    const ref = m[1] ?? "";
+    if (!ref) continue;
+    // Avoid path traversal patterns.
+    if (ref.includes("..")) continue;
+    entities.push({
+      text: ref,
+      type: "file",
+      confidence: 0.9,
+      sourceFile,
+      span: { start: m.index ?? 0, end: (m.index ?? 0) + m[0].length },
+    });
+  }
+
+  // Code symbols: CamelCase identifiers.
+  const codeSymbols = [...text.matchAll(/\b([A-Z][a-zA-Z0-9_]{2,})\b/g)];
+  for (const m of codeSymbols) {
+    const sym = m[1] ?? "";
+    if (!sym) continue;
+    if (entities.some((e) => e.type === "code_symbol" && e.text === sym)) continue;
+    entities.push({
+      text: sym,
+      type: "code_symbol",
+      confidence: 0.6,
+      sourceFile,
+      span: { start: m.index ?? 0, end: (m.index ?? 0) + m[0].length },
+    });
+  }
+
+  // Capitalized phrases (3+ words) as potential concepts.
+  const conceptRefs = [...text.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){2,})\b/g)];
+  for (const m of conceptRefs) {
+    const phrase = (m[1] ?? "").trim();
+    if (!phrase) continue;
+    if (entities.some((e) => e.text === phrase)) continue;
+    entities.push({
+      text: phrase,
+      type: "concept",
+      confidence: 0.5,
+      sourceFile,
+      span: { start: m.index ?? 0, end: (m.index ?? 0) + m[0].length },
+    });
+  }
+
+  return entities;
+}
+
 export interface KgNode {
   id: string;
   type: KgNodeType;
@@ -63,9 +129,15 @@ export interface KgQueryEntry {
   hits: number;
 }
 
+export interface KgSearchAugment {
+  topicNodes: KgNode[];
+  connectedClaims: Array<{ claim: KgNode; evidenceFiles: string[] }>;
+  graphDistance: number;
+}
+
 // ── Internal Helpers ───────────────────────────────────────────
 
-let _instance: KnowledgeGraph | null = null;
+const _instances = new Map<string, KnowledgeGraph>();
 
 function simpleHash(s: string): string {
   let h = 0;
@@ -101,14 +173,21 @@ export class KnowledgeGraph {
 
   /** Singleton per vault (avoids double-loading). */
   static forVault(vaultPath: string): KnowledgeGraph {
-    if (!_instance || _instance.vaultPath !== vaultPath) {
-      _instance = new KnowledgeGraph(vaultPath);
+    const key = String(vaultPath || "");
+    if (!_instances.has(key)) {
+      _instances.set(key, new KnowledgeGraph(key));
     }
-    return _instance;
+    return _instances.get(key)!;
   }
 
   /** Reset singleton (useful for testing). */
-  static reset(): void { _instance = null; }
+  static reset(vaultPath: string): void {
+    _instances.delete(String(vaultPath || ""));
+  }
+
+  static resetAll(): void {
+    _instances.clear();
+  }
 
   async init(): Promise<void> {
     if (this.loaded) return;
@@ -183,6 +262,22 @@ export class KnowledgeGraph {
       if (e.from === id || e.to === id) this.edges.delete(eid);
     }
     this.dirty = true;
+  }
+
+  private findOrCreateNodeByHash(type: KgNodeType, label: string, metadata?: Record<string, unknown>): string {
+    const contentHash = simpleHash(`${type}:${label}:${JSON.stringify(metadata ?? {})}`);
+    for (const [id, n] of this.nodes) {
+      if (n.type === type && n.content_hash === contentHash) return id;
+    }
+    return this.addNode({ type, label, metadata, content_hash: contentHash });
+  }
+
+  upsertSource(label: string, metadata?: Record<string, unknown>): string {
+    return this.findOrCreateNodeByHash("source", label, metadata);
+  }
+
+  upsertEntity(label: string, metadata?: Record<string, unknown>): string {
+    return this.findOrCreateNodeByHash("entity", label, metadata);
   }
 
   upsertClaim(claimText: string, sourceNodeId: string, confidence = 0.8): string {
@@ -361,6 +456,109 @@ export class KnowledgeGraph {
     const sn = [...this.nodes.values()].filter((n) => visited.has(n.id));
     const se = [...this.edges.values()].filter((e) => visited.has(e.from) && visited.has(e.to));
     return { nodes: sn, edges: se };
+  }
+
+  /**
+   * Graph-based search augmentation (bounded + best-effort):
+   * - Prefer semantic match when embeddings are available (embed query + cosineSim).
+   * - Fall back to substring match when embeddings are unavailable.
+   * - Collect connected claims within N hops and return their evidence source files.
+   */
+  async augmentSearch(
+    query: string,
+    ollamaBaseUrl: string,
+    opts?: { maxTopicNodes?: number; hops?: number; minSimilarity?: number; maxEmbedNodes?: number },
+  ): Promise<KgSearchAugment> {
+    const q = String(query ?? "").toLowerCase().trim();
+    const maxTopicNodes = Math.max(1, Math.min(10, opts?.maxTopicNodes ?? 5));
+    const hops = Math.max(1, Math.min(3, opts?.hops ?? 2));
+    if (!q) return { topicNodes: [], connectedClaims: [], graphDistance: hops };
+
+    const minSimilarity = Math.max(0.5, Math.min(0.95, opts?.minSimilarity ?? 0.78));
+    const maxEmbedNodes = Math.max(0, Math.min(12, opts?.maxEmbedNodes ?? 6));
+
+    // 1) Try semantic match (bounded): embed query, then compare to nodes with embeddings.
+    let topicNodes: KgNode[] = [];
+    try {
+      const qVec = await embedText(q.slice(0, 300), ollamaBaseUrl);
+
+      // Candidate nodes to consider for semantic matching.
+      const candidates = [...this.nodes.values()].filter(
+        (n) => (n.type === "entity" || n.type === "source" || n.type === "claim") && n.label,
+      );
+
+      // Lazily embed a small number of missing nodes (best-effort; expensive calls are capped).
+      let embedded = 0;
+      for (const n of candidates) {
+        if (embedded >= maxEmbedNodes) break;
+        if (n.embedding?.length) continue;
+        // Prefer embedding claims (most semantically rich) over sources.
+        if (n.type !== "claim" && n.type !== "entity") continue;
+        try {
+          n.embedding = await embedText(n.label.slice(0, 800), ollamaBaseUrl);
+          n.updated_at = new Date().toISOString();
+          n.version++;
+          this.dirty = true;
+          embedded++;
+        } catch {
+          continue;
+        }
+      }
+
+      const scored = candidates
+        .filter((n) => n.embedding?.length)
+        .map((n) => ({ node: n, sim: cosineSim(qVec, n.embedding!) }))
+        .filter((x) => x.sim >= minSimilarity)
+        .sort((a, b) => b.sim - a.sim)
+        .slice(0, maxTopicNodes)
+        .map((x) => x.node);
+
+      if (scored.length > 0) {
+        // Prefer entity/source nodes as “topics” for subgraph expansion.
+        const entFirst = scored
+          .filter((n) => n.type === "entity" || n.type === "source")
+          .slice(0, maxTopicNodes);
+        topicNodes = entFirst.length > 0 ? entFirst : scored.slice(0, maxTopicNodes);
+      }
+    } catch {
+      // ignore; fall back to deterministic substring match below
+    }
+
+    // 2) Fallback: deterministic substring match.
+    if (topicNodes.length === 0) {
+      topicNodes = [...this.nodes.values()]
+        .filter(
+          (n) =>
+            (n.type === "entity" || n.type === "source") &&
+            n.label.toLowerCase().includes(q.slice(0, 24)),
+        )
+        .slice(0, maxTopicNodes);
+    }
+
+    const connectedClaims: Array<{ claim: KgNode; evidenceFiles: string[] }> = [];
+    for (const node of topicNodes) {
+      const { nodes: subgraphNodes, edges } = this.subgraph(node.id, hops);
+      const claims = subgraphNodes.filter((n) => n.type === "claim");
+      for (const claim of claims) {
+        const sourceEdges = edges.filter((e) => e.to === claim.id && e.type === "supports");
+        const evidenceFiles = sourceEdges
+          .map((e) => this.nodes.get(e.from))
+          .filter((n): n is KgNode => Boolean(n))
+          .map((n) => String(n.metadata?.sourceFile ?? n.label ?? ""))
+          .filter((p) => Boolean(p) && !p.includes("..") && !p.startsWith("/"));
+        connectedClaims.push({ claim, evidenceFiles: [...new Set(evidenceFiles)] });
+      }
+    }
+
+    // Deduplicate claims
+    const seen = new Set<string>();
+    const deduped = connectedClaims.filter((cc) => {
+      if (seen.has(cc.claim.id)) return false;
+      seen.add(cc.claim.id);
+      return true;
+    });
+
+    return { topicNodes, connectedClaims: deduped, graphDistance: hops };
   }
 
   // ── Persistence ──────────────────────────────────────────────

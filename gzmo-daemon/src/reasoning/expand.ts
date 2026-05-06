@@ -9,6 +9,7 @@ import type { ToolCallRecord } from "../tools/types";
 import type { ToolContext } from "../tools/types";
 import type { EmbeddingStore } from "../embeddings";
 import { searchVaultHybrid, type SearchResult } from "../search";
+import type { StrategyInjectContext } from "../learning/ledger";
 
 export interface ExpansionChild {
   type: ReasoningNodeType;
@@ -101,14 +102,26 @@ export async function expandAnalyze(
   temp: number,
   maxTok: number,
   pastTraceContext?: string,
+  strategyContext?: StrategyInjectContext,
 ): Promise<ExpansionChild[]> {
   const contextBlock = pastTraceContext
     ? `\n\nPast similar tasks succeeded with this approach:\n${pastTraceContext}\n`
     : "";
 
+  const strategyBlock = strategyContext
+    ? `\n\n## Strategy guidance (from past performance)\n\n${[
+        ...(strategyContext.tips ?? []).map((t) => `${t.kind === "positive" ? "✓ Effective" : "✗ Avoid"}: ${t.style} — ${t.reason}`),
+        strategyContext.winningPattern ? `Winning pattern: ${strategyContext.winningPattern.promptFragment}` : "",
+        strategyContext.recentFailureContext ?? "",
+      ]
+        .filter(Boolean)
+        .join("\n")}\n`
+    : "";
+
   const decompositionPrompt = [
     "Decompose the following task into 2–4 concrete sub-tasks.",
     contextBlock,
+    strategyBlock,
     "Each sub-task should be independently verifiable.",
     "Output as a numbered list. Be concise.",
     "",

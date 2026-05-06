@@ -114,7 +114,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now gzmo-daemon
 ```
 
-Optional: also install the **Pi skill pack**:
+Optional: also install the **Pi shell skill pack** into `~/.pi/skills/gzmo-daemon` (for `submit_task.sh` / `watch_task.sh` outside the extension). Pi **inside the repo** can use [`.pi/extensions/gzmo-tinyfolder.ts`](.pi/extensions/gzmo-tinyfolder.ts) instead; it registers the bundled skill under `.pi/extensions/skills/gzmo-daemon/` via `resources_discover` (no copy required for that path).
 
 ```bash
 ./scripts/agentic-setup.sh --vault "$VAULT" --with-pi
@@ -317,16 +317,21 @@ Structured traces, filesystem tools, Tree-of-Thought search, and cross-task clai
 - **`GZMO_ENABLE_BELIEFS`**: `on|off` — append claims to `GZMO/Reasoning_Traces/claims.jsonl` (default: `off`)
 - **`GZMO_ENABLE_LEARNING`**: `on|off` — append task outcomes to `GZMO/strategy_ledger.jsonl` and inject strategy tips into prompts when enough history exists (default: `off`)
 - **`GZMO_LEARNING_BACKFILL`**: `on|off` — on daemon boot (after embeddings init), append ledger rows from existing `GZMO/perf.jsonl` (default: `off`)
+- **`GZMO_LEARNING_AB_TEST`**: `on|off` — when on, randomly skips strategy injection for ~30% of ToT decompositions (control group) (default: `off`)
 - **`GZMO_ENABLE_TRACE_MEMORY`**: `on|off` — embed past traces into the store at boot and retrieve similar traces before ToT decomposition (default: `off`)
 - **`GZMO_ENABLE_GATES`**: `on|off` — analyze / retrieve / reason gates in the ToT pipeline (default: `off`)
 - **`GZMO_ENABLE_CRITIQUE`**: `on|off` — on total ToT failure, run a critique pass and optionally one replan wave (default: `off`)
 - **`GZMO_ENABLE_MODEL_ROUTING`**: `on|off` — route ToT LLM calls by role (`fast` / `reason` / `judge`) (default: `off`)
 - **`GZMO_FAST_MODEL`**, **`GZMO_REASON_MODEL`**, **`GZMO_JUDGE_MODEL`**: Ollama model tags when routing is on (reason/judge fall back to `OLLAMA_MODEL` when unset)
 - **`GZMO_ENABLE_TOOL_CHAINING`**: `on|off` — allow follow-up `vault_read` / `dir_list` calls inferred from prior tool output, still capped by `GZMO_MAX_TOOL_CALLS` (default: `off`)
+- **`GZMO_ENABLE_KNOWLEDGE_GRAPH`**: `on|off` — update the on-vault Knowledge Graph on task completion (default: `off`)
+- **`GZMO_KG_SEARCH_AUGMENT`**: `on|off` — augment vault retrieval using Knowledge Graph-connected sources (default: `off`)
 
 View a trace (from `gzmo-daemon/` with `VAULT_PATH` set): `bun run trace:view -- <trace_id_or_task_file>` — add `--thinking` to print stored model thinking snippets.
 
 Ledger report: `bun run ledger:analyze` — sync traces into embeddings without full daemon boot: `bun run trace:sync`.
+
+Benchmark harness (temp vault, does not touch your real vault): `bun run benchmark` (optionally set `GZMO_BENCHMARK_RUNS=5`).
 
 ---
 
@@ -591,13 +596,17 @@ Quick overview of what's covered:
 
 ## Repo contents (what is public)
 
-`gzmo-daemon/`, `scripts/`, `install_service.sh`, `README.md`, `AGENTS.md`, `LICENSE`, `.gitignore`, [`.gitattributes`](.gitattributes), [`.editorconfig`](.editorconfig), [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md) (optional Pi/shell inbox helpers). Vault data stays local and is not in git.
+`gzmo-daemon/`, `scripts/`, `install_service.sh`, `README.md`, `AGENTS.md`, `LICENSE`, `.gitignore`, [`.gitattributes`](.gitattributes), [`.editorconfig`](.editorconfig), [`.pi/extensions/`](.pi/extensions/) (Pi extension + bundled `gzmo-daemon` skill), [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md) (optional shell/CI inbox helpers). Vault data stays local and is not in git.
 
 ---
 
 ## Pi skill (optional)
 
-Shell scripts that write and watch **inbox** Markdown live in [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md). Install into `~/.pi/skills/gzmo-daemon` and set **`GZMO_ENV_FILE`** to the absolute path of `gzmo-daemon/.env` — step-by-step: **[AGENTS.md — Pi skill (optional)](AGENTS.md#pi-skill-optional)**.
+**Two surfaces:**
+
+1. **Pi in this repo (recommended)** — Enable the project extension [`.pi/extensions/gzmo-tinyfolder.ts`](.pi/extensions/gzmo-tinyfolder.ts). It registers `resources_discover` so Pi discovers the skill at [`.pi/extensions/skills/gzmo-daemon/`](.pi/extensions/skills/gzmo-daemon/) and exposes tools such as `gzmo_submit_task`, `gzmo_query_context`, `gzmo_watch_task`, and `gzmo_health`. You do **not** need to copy that skill into `~/.pi/skills/` for this path. Slash commands include `/gzmo` (dashboard) and `/gzmo-last`. Set **`GZMO_ENV_FILE`** to the absolute path of `gzmo-daemon/.env` (or run with cwd under the repo so env discovery matches [Configure](README.md#configure-environment-variables)).
+
+2. **Shell, CI, or global Pi scripts** — Bash helpers that write and watch **inbox** Markdown live in [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md). Install into `~/.pi/skills/gzmo-daemon` if you want those scripts on your PATH via Pi’s skills tree; set **`GZMO_ENV_FILE`** to the absolute path of `gzmo-daemon/.env`. Step-by-step copy/install: **[AGENTS.md — Pi skill (optional)](AGENTS.md#pi-skill-optional)**.
 
 ---
 

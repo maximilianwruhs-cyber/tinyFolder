@@ -35,6 +35,8 @@ export interface EmbeddingChunk {
     status?: string;
     updated?: string;
     task_type?: string;
+    /** Set when this result was injected by Knowledge Graph augmentation. */
+    kg_augmented?: boolean;
   };
 }
 

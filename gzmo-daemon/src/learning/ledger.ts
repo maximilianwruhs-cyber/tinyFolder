@@ -30,6 +30,8 @@ export interface StrategyEntry {
   z_score: number;
   citation_rate: number;
   total_ms: number;
+  /** Whether strategy guidance was injected into prompting (A/B measurement). */
+  strategy_injected?: boolean;
   timestamp: string;
   trace_id?: string;
 }
@@ -40,6 +42,23 @@ export interface StrategyTip {
   reason: string;
   z_score: number;
   task_count: number;
+}
+
+export interface WinningPattern {
+  taskType: TaskTypeFingerprint;
+  decompositionStyle: string;
+  avgZScore: number;
+  sampleSize: number;
+  promptFragment: string;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+export interface StrategyInjectContext {
+  tips: StrategyTip[];
+  winningPattern?: WinningPattern;
+  recentFailureContext?: string;
+  injected: boolean;
 }
 
 const LEDGER_PATH = "GZMO/strategy_ledger.jsonl";
@@ -74,6 +93,75 @@ export async function loadLedger(vaultPath: string, maxLines = 200): Promise<Str
     }
   }
   return entries;
+}
+
+function buildPromptFragmentForStyle(style: string): string {
+  switch (style) {
+    case "direct_read":
+      return "Prefer reading the exact referenced file(s) directly before broader retrieval.";
+    case "broad_scope":
+      return "Start with a broad overview retrieval, then narrow to specific evidence.";
+    case "narrow_scope":
+      return "Start with the most specific file- or symbol-targeted retrieval first.";
+    default:
+      return "Decompose into independently verifiable sub-tasks.";
+  }
+}
+
+export async function computeWinningPatterns(
+  vaultPath: string,
+  taskType: TaskTypeFingerprint,
+): Promise<WinningPattern[]> {
+  const ledger = await loadLedger(vaultPath, 300);
+  const relevant = ledger.filter((e) => e.task_type === taskType && Number.isFinite(e.z_score));
+  if (relevant.length < 5) return [];
+
+  const winners = relevant.filter((e) => e.z_score >= 0.7);
+  if (winners.length < 3) return [];
+
+  const byStyle = new Map<string, WinningPattern>();
+  for (const w of winners) {
+    const existing = byStyle.get(w.decomposition_style);
+    if (!existing) {
+      byStyle.set(w.decomposition_style, {
+        taskType,
+        decompositionStyle: w.decomposition_style,
+        avgZScore: w.z_score,
+        sampleSize: 1,
+        promptFragment: buildPromptFragmentForStyle(w.decomposition_style),
+        firstSeen: w.timestamp,
+        lastSeen: w.timestamp,
+      });
+    } else {
+      existing.avgZScore =
+        (existing.avgZScore * existing.sampleSize + w.z_score) / (existing.sampleSize + 1);
+      existing.sampleSize++;
+      if (w.timestamp < existing.firstSeen) existing.firstSeen = w.timestamp;
+      if (w.timestamp > existing.lastSeen) existing.lastSeen = w.timestamp;
+    }
+  }
+
+  return [...byStyle.values()]
+    .filter((p) => p.sampleSize >= 3)
+    .sort((a, b) => b.avgZScore - a.avgZScore)
+    .slice(0, 2);
+}
+
+export async function getRecentFailureContext(
+  vaultPath: string,
+  taskType: TaskTypeFingerprint,
+): Promise<string | undefined> {
+  const ledger = await loadLedger(vaultPath, 200);
+  const failures = ledger.filter((e) => e.task_type === taskType && !e.ok).slice(-3);
+  if (failures.length === 0) return undefined;
+
+  const styles = new Set(failures.map((f) => f.decomposition_style));
+  const lines = [
+    "## Recent failures for this task type",
+    `Failed ${failures.length} time(s) recently. Failed styles: ${[...styles].join(", ")}.`,
+    "Avoid these approaches if they appear in the decomposition.",
+  ];
+  return lines.join("\n");
 }
 
 export function classifyTaskType(body: string): TaskTypeFingerprint {

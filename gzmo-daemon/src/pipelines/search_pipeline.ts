@@ -111,6 +111,48 @@ export class SearchPipeline implements TaskPipeline {
         && (allowDocs || !r.file.startsWith("docs/"))
       );
 
+      // ── Knowledge Graph search augmentation (optional) ───────────────
+      // Goal: force-include a small number of KG-connected files to improve recall.
+      if (readBoolEnv("GZMO_KG_SEARCH_AUGMENT", false)) {
+        try {
+          const { KnowledgeGraph } = await import("../knowledge_graph/graph");
+          const kg = KnowledgeGraph.forVault(vaultRoot);
+          await kg.init();
+          const augment = await kg.augmentSearch(body, getOllamaUrl(), { maxTopicNodes: 5, hops: 2 });
+
+          // Force-include up to 3 files from connected claim sources, if present in embeddingStore.
+          const forceFiles = augment.connectedClaims
+            .flatMap((cc) => cc.evidenceFiles)
+            .filter(Boolean)
+            .slice(0, 6);
+
+          const injected: SearchResult[] = [];
+          for (const f of forceFiles) {
+            if (injected.length >= 3) break;
+            const already = results.find((r) => r.file === f || r.file.endsWith(`/${f}`));
+            if (already) continue;
+            const chunk = embeddingStore.chunks.find((c) => c.file === f || c.file.endsWith(`/${f}`));
+            if (!chunk) continue;
+            // Keep consistent with SearchResult shape.
+            const baseMeta = chunk.metadata ?? { pathBucket: "wiki", tags: [] };
+            injected.push({
+              file: chunk.file,
+              heading: chunk.heading,
+              text: chunk.text,
+              score: 0.85,
+              metadata: { ...baseMeta, kg_augmented: true },
+            });
+          }
+
+          if (injected.length > 0) {
+            // Prepend injected results so they get a chance to appear in evidence packets.
+            results.unshift(...injected);
+          }
+        } catch {
+          // Non-fatal; augmentation is best-effort.
+        }
+      }
+
       let toolResults: ToolCallRecord[] = [];
       const enableTools = readBoolEnv("GZMO_ENABLE_TOOLS", false);
       const maxToolCalls = readIntEnv("GZMO_MAX_TOOL_CALLS", 3, 0, 32);
