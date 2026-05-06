@@ -6,6 +6,9 @@ export interface DoctorFlags {
   writeReports: boolean;
   runLegacy?: "unit" | "pipeline" | "nightshift" | "stress" | "all";
   timeoutMs: number;
+  heal: boolean;
+  healRetries: number;
+  healDelayMs: number;
 }
 
 function pickProfile(v: string | undefined): DoctorProfile | null {
@@ -22,6 +25,9 @@ export function parseDoctorFlags(argv = process.argv.slice(2)): DoctorFlags {
   let writeReports = true;
   let runLegacy: DoctorFlags["runLegacy"] | undefined;
   let timeoutMs = 120_000;
+  let heal = false;
+  let healRetries = 3;
+  let healDelayMs = 2000;
 
   const args = [...argv];
   for (let i = 0; i < args.length; i++) {
@@ -59,6 +65,30 @@ export function parseDoctorFlags(argv = process.argv.slice(2)): DoctorFlags {
       continue;
     }
 
+    if (a === "--heal") { heal = true; continue; }
+    if (a === "--heal-retries") {
+      const n = Number.parseInt(args[i + 1] ?? "", 10);
+      if (Number.isFinite(n) && n >= 0) healRetries = n;
+      i++;
+      continue;
+    }
+    if (a.startsWith("--heal-retries=")) {
+      const n = Number.parseInt(a.split("=", 2)[1] ?? "", 10);
+      if (Number.isFinite(n) && n >= 0) healRetries = n;
+      continue;
+    }
+    if (a === "--heal-delay-ms") {
+      const n = Number.parseInt(args[i + 1] ?? "", 10);
+      if (Number.isFinite(n) && n >= 0) healDelayMs = n;
+      i++;
+      continue;
+    }
+    if (a.startsWith("--heal-delay-ms=")) {
+      const n = Number.parseInt(a.split("=", 2)[1] ?? "", 10);
+      if (Number.isFinite(n) && n >= 0) healDelayMs = n;
+      continue;
+    }
+
     if (a === "--timeout-ms") {
       const n = Number.parseInt(args[i + 1] ?? "", 10);
       if (Number.isFinite(n) && n > 0) timeoutMs = n;
@@ -77,5 +107,5 @@ export function parseDoctorFlags(argv = process.argv.slice(2)): DoctorFlags {
     // Keep readonly, but the runner will SKIP writey legacy steps and report the requirement.
   }
 
-  return { profile, readonly, writeReports, runLegacy, timeoutMs };
+  return { profile, readonly, writeReports, runLegacy, timeoutMs, heal, healRetries, healDelayMs };
 }

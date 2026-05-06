@@ -1,5 +1,5 @@
 /**
- * doctor.ts — Smart Doctor v2 (local-first)
+ * doctor.ts — Smart Doctor v3 (self-healing loop)
  *
  * Default behavior:
  * - Deep profile
@@ -7,6 +7,11 @@
  * - Writes reports to repo (`gzmo/doctor-report.{md,json}`)
  *
  * Enable vault-writing checks (Inbox, Dream/SelfAsk, wiki engine) with `--write`.
+ *
+ * Self-healing mode:
+ *   --heal              Attempt safe auto-fixes for FAIL/WARN steps, then re-run.
+ *   --heal-retries N    Max iterations (default 3).
+ *   --heal-delay-ms N   Milliseconds to wait between heal and re-run (default 2000).
  */
 
 import { resolve, join } from "path";
@@ -17,7 +22,8 @@ import { runStep } from "./src/doctor/runner";
 import { discoverOllama, ollamaChatJson } from "./src/doctor/ollama";
 import { reportToMarkdown, writeDoctorReports } from "./src/doctor/report";
 import { runLegacy } from "./src/doctor/legacy";
-import type { DoctorEnvironment, DoctorReport, DoctorStepResult } from "./src/doctor/types";
+import type { DoctorEnvironment, DoctorReport, DoctorStepResult, HealingExecution } from "./src/doctor/types";
+import { applyHealing, compareStepSets, shouldHealAgain } from "./src/doctor/healer";
 
 import { runWikiLint } from "./src/wiki_lint";
 import { syncEmbeddings } from "./src/embeddings";
@@ -61,10 +67,13 @@ function computeEnv(): DoctorEnvironment {
 
 function printHeader(flags: ReturnType<typeof parseDoctorFlags>, env: DoctorEnvironment) {
   console.log("════════════════════════════════════════════════════");
-  console.log("  GZMO Doctor v2");
+  console.log("  GZMO Doctor v3");
   console.log("════════════════════════════════════════════════════");
   console.log(`Profile: ${flags.profile}`);
   console.log(`Mode:    ${flags.readonly ? "readonly" : "write"}`);
+  if (flags.heal) {
+    console.log(`Healing: enabled (retries=${flags.healRetries}, delay=${flags.healDelayMs}ms)`);
+  }
   console.log(`Vault:   ${env.vaultPath}`);
   console.log("");
 }
@@ -84,11 +93,15 @@ function mapDoctorToGzmoProfile(profile: ReturnType<typeof parseDoctorFlags>["pr
   }
 }
 
-async function main() {
-  const flags = parseDoctorFlags();
-  const env = computeEnv();
-  printHeader(flags, env);
+interface DiagnosticsBag {
+  steps: DoctorStepResult[];
+  ollamaOk: boolean;
+  ollamaV1?: string;
+  model: string;
+  store?: EmbeddingStore;
+}
 
+async function runDiagnostics(flags: ReturnType<typeof parseDoctorFlags>, env: DoctorEnvironment): Promise<DiagnosticsBag> {
   const steps: DoctorStepResult[] = [];
   const stepCtx = { readonly: flags.readonly, timeoutMs: flags.timeoutMs };
 
@@ -141,7 +154,19 @@ async function main() {
       title: "Inbox directory exists",
       run: async () => {
         if (!ensureDirExists(env.inboxPath)) {
-          return { status: "FAIL", summary: "Inbox missing", details: env.inboxPath };
+          return {
+            status: "FAIL",
+            summary: "Inbox missing",
+            details: env.inboxPath,
+            fix: [
+              {
+                id: "fix.vault.mkdir",
+                title: "Create missing vault directories",
+                severity: "error",
+                commands: [`mkdir -p "${env.inboxPath}"`, `mkdir -p "${join(env.vaultPath, "GZMO", "Subtasks")}"`, `mkdir -p "${env.thoughtCabinetPath}"`, `mkdir -p "${join(env.vaultPath, "GZMO", "Quarantine")}"`, `mkdir -p "${join(env.vaultPath, "wiki")}"`],
+              },
+            ],
+          };
         }
         return { status: "PASS", summary: "OK" };
       },
@@ -162,8 +187,6 @@ async function main() {
         signal,
       });
       if (!d.baseUrl) {
-        // CI/local dev without Ollama should still be able to run Doctor meaningfully.
-        // Only deep profile treats missing Ollama as a hard failure.
         return { status: flags.profile === "deep" ? "FAIL" : "WARN", summary: d.details, fix: d.fix };
       }
       env.ollamaBaseUrl = d.baseUrl;
@@ -254,7 +277,6 @@ async function main() {
             summary: "Skipped (Ollama unavailable)",
           };
         }
-        // syncEmbeddings uses base URL (no /v1)
         store = await syncEmbeddings(env.vaultPath, env.embeddingsPath, env.ollamaBaseUrl);
         return { status: "PASS", summary: `chunks=${store.chunks.length}` };
       },
@@ -280,15 +302,21 @@ async function main() {
           mkdirSync(join(vault, "GZMO", "Thought_Cabinet"), { recursive: true });
           mkdirSync(join(vault, "wiki", "topics"), { recursive: true });
 
-          // Two files → initial full sync, then rapid queue operations.
-          writeFileSync(join(vault, "wiki", "topics", "A.md"), "# A\n\nAlpha.\n\nMore content to exceed minimal length.\n".repeat(5), "utf-8");
-          writeFileSync(join(vault, "wiki", "topics", "B.md"), "# B\n\nBravo.\n\nMore content to exceed minimal length.\n".repeat(5), "utf-8");
+          writeFileSync(
+            join(vault, "wiki", "topics", "A.md"),
+            "# A\n\nAlpha.\n\nMore content to exceed minimal length.\n".repeat(5),
+            "utf-8",
+          );
+          writeFileSync(
+            join(vault, "wiki", "topics", "B.md"),
+            "# B\n\nBravo.\n\nMore content to exceed minimal length.\n".repeat(5),
+            "utf-8",
+          );
 
           const storePath = join(vault, "GZMO", "embeddings.json");
           const q = new EmbeddingsQueue(vault, storePath, env.ollamaBaseUrl);
           await q.initByFullSync();
 
-          // Burst: enqueue multiple upserts/removes; serialization guarantees no interleaving writes.
           q.enqueueUpsertFile("wiki/topics/A.md");
           q.enqueueUpsertFile("wiki/topics/B.md");
           q.enqueueRemoveFile("wiki/topics/A.md");
@@ -366,7 +394,6 @@ async function main() {
             issues.push(`JSON parse failed: ${e?.message ?? String(e)}`);
           }
           return {
-            // JSON compliance is a quality signal; default to WARN rather than hard-fail.
             status: ok && issues.length === 0 ? "PASS" : "WARN",
             summary: ok ? (issues.length ? "Valid JSON (schema issues)" : "Valid JSON") : "Invalid JSON",
             details: issues.length ? `${issues.join(", ")}\n\n${out.slice(0, 1200)}` : out.slice(0, 1200),
@@ -402,15 +429,14 @@ async function main() {
       summary: "Skipped (Ollama unavailable)",
     });
   } else {
-    // Minimal pipeline: think/search/chain using processTask (writes into Inbox; cleaned after)
     const pulse = new PulseLoop(defaultConfig());
     pulse.start(join(env.vaultPath, "GZMO", "CHAOS_STATE.json"));
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 800));
     const snap = pulse.snapshot();
     const calmSnap: ChaosSnapshot = { ...snap, tension: 5, energy: 100, alive: true };
     const watcher = new VaultWatcher(env.inboxPath);
     watcher.start();
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 200));
     const memory = new TaskMemory(join(env.vaultPath, "GZMO", "memory.json"));
 
     const created: string[] = [];
@@ -423,7 +449,6 @@ async function main() {
     };
 
     try {
-      // think
       steps.push(
         await runStep(stepCtx, {
           id: "pipeline.think",
@@ -440,7 +465,6 @@ async function main() {
         }),
       );
 
-      // search
       steps.push(
         await runStep(stepCtx, {
           id: "pipeline.search",
@@ -457,7 +481,6 @@ async function main() {
         }),
       );
 
-      // chain
       steps.push(
         await runStep(stepCtx, {
           id: "pipeline.chain",
@@ -479,7 +502,6 @@ async function main() {
     } finally {
       await watcher.stop().catch(() => {});
       pulse.stop();
-      // cleanup
       for (const fp of created) {
         try { fs.unlinkSync(fp); } catch {}
       }
@@ -520,19 +542,10 @@ async function main() {
     );
   }
 
-  const report: DoctorReport = {
-    generatedAt: new Date().toISOString(),
-    profile: flags.profile,
-    readonly: flags.readonly,
-    writeReports: flags.writeReports,
-    runLegacy: flags.runLegacy,
-    env,
-    steps,
-  };
+  return { steps, ollamaOk, ollamaV1, model, store };
+}
 
-  const markdown = reportToMarkdown(report);
-  const json = JSON.stringify(report, null, 2);
-
+function printSummary(steps: DoctorStepResult[]) {
   const counts = steps.reduce(
     (acc, s) => {
       acc[s.status] = (acc[s.status] ?? 0) + 1;
@@ -541,14 +554,94 @@ async function main() {
     { PASS: 0, WARN: 0, FAIL: 0, SKIP: 0 } as Record<string, number>,
   );
   console.log(`Summary: PASS=${counts.PASS} WARN=${counts.WARN} FAIL=${counts.FAIL} SKIP=${counts.SKIP}`);
-
   for (const s of steps) {
     console.log(`[${s.status}] ${s.title}: ${s.summary}`);
   }
+}
+
+async function main() {
+  const flags = parseDoctorFlags();
+  const env = computeEnv();
+  printHeader(flags, env);
+
+  let stepSignatures: { id: string; status: string; summary?: string }[] = [];
+  const healingExecutions: HealingExecution[] = [];
+
+  // Primary diagnostic pass
+  let bag = await runDiagnostics(flags, env);
+
+  // Self-healing loop
+  if (flags.heal) {
+    for (let iteration = 1; iteration <= flags.healRetries; iteration++) {
+      const hadIssues = bag.steps.some((s) => s.status === "FAIL" || s.status === "WARN");
+      if (!hadIssues) break;
+
+      console.log(`\n--- Healing pass ${iteration}/${flags.healRetries} ---`);
+      const before = bag.steps.map((s) => ({ id: s.id, status: s.status, summary: s.summary }));
+
+      const controller = new AbortController();
+      const healCtx = { env, readonly: flags.readonly, signal: controller.signal };
+      const exec = await applyHealing(bag.steps, healCtx);
+
+      if (exec.applied.length === 0) {
+        console.log("No applicable fix handlers found. Stopping healing loop.");
+        break;
+      }
+
+      // Wait for fixes to take effect
+      if (flags.healDelayMs > 0) {
+        console.log(`Waiting ${flags.healDelayMs}ms for fixes to settle...`);
+        await new Promise((r) => setTimeout(r, flags.healDelayMs));
+      }
+
+      // Re-run diagnostics
+      bag = await runDiagnostics(flags, env);
+      const after = bag.steps.map((s) => ({ id: s.id, status: s.status, summary: s.summary }));
+      const comparison = compareStepSets(before, after);
+
+      exec.iteration = iteration;
+      exec.resolvedIds = comparison.resolved;
+      exec.remainingIds = bag.steps.filter((s) => s.status === "FAIL" || s.status === "WARN").map((s) => s.id);
+      healingExecutions.push(exec);
+
+      console.log(`Resolved: ${comparison.resolved.length}, Worsened: ${comparison.worsened.length}, Same: ${comparison.same.length}`);
+      for (const a of exec.applied) {
+        console.log(`  [${a.success ? "OK" : "FAIL"}] ${a.fixTitle}: ${a.output ?? a.error ?? ""}`);
+      }
+
+      // Stop if nothing improved and nothing new was applied
+      if (comparison.resolved.length === 0) {
+        console.log("No improvements in this pass. Stopping healing loop.");
+        break;
+      }
+
+      // If all clear, break early
+      if (!bag.steps.some((s) => s.status === "FAIL" || s.status === "WARN")) {
+        console.log("All issues resolved.");
+        break;
+      }
+    }
+  }
+
+  const report: DoctorReport = {
+    generatedAt: new Date().toISOString(),
+    profile: flags.profile,
+    readonly: flags.readonly,
+    writeReports: flags.writeReports,
+    runLegacy: flags.runLegacy,
+    env,
+    steps: bag.steps,
+    healingExecutions: flags.heal ? healingExecutions : undefined,
+  };
+
+  const markdown = reportToMarkdown(report);
+  const json = JSON.stringify(report, null, 2);
+
+  printSummary(bag.steps);
 
   if (flags.writeReports) {
     const repoRoot = resolve(import.meta.dir, "..");
-    const writeToVault = !flags.readonly; // only write into vault when explicitly in write mode
+    const writeToVault = !flags.readonly;
     const paths = await writeDoctorReports({
       report,
       markdown,
@@ -562,7 +655,7 @@ async function main() {
     console.log(`Report written: ${paths.mdPath}`);
   }
 
-  const failed = steps.some((s) => s.status === "FAIL");
+  const failed = bag.steps.some((s) => s.status === "FAIL");
   process.exit(failed ? 1 : 0);
 }
 

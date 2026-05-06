@@ -19,6 +19,11 @@ export function reportToMarkdown(r: DoctorReport): string {
   lines.push(`- Generated: ${r.generatedAt}`);
   lines.push(`- Profile: ${r.profile}`);
   lines.push(`- Mode: ${r.readonly ? "readonly" : "write"}`);
+  if (r.healingExecutions && r.healingExecutions.length) {
+    const totalApplied = r.healingExecutions.reduce((n, e) => n + e.applied.length, 0);
+    const totalResolved = new Set(r.healingExecutions.flatMap((e) => e.resolvedIds)).size;
+    lines.push(`- Healing: ${r.healingExecutions.length} pass(es), ${totalApplied} fix(es) applied, ${totalResolved} resolved`);
+  }
   lines.push(`- Summary: PASS=${counts.PASS} WARN=${counts.WARN} FAIL=${counts.FAIL} SKIP=${counts.SKIP}`, "");
 
   lines.push("## Environment", "");
@@ -54,6 +59,30 @@ export function reportToMarkdown(r: DoctorReport): string {
         for (const e of f.fileEdits) lines.push(`  - \`${e.path}\`: ${e.description}`);
         lines.push("");
       }
+    }
+  }
+
+  if (r.healingExecutions && r.healingExecutions.length) {
+    lines.push("## Healing execution", "");
+    for (const ex of r.healingExecutions) {
+      lines.push(`### Pass ${ex.iteration}`, "");
+      if (ex.applied.length) {
+        lines.push("| Fix | Status | Output |");
+        lines.push("|-----|--------|--------|");
+        for (const a of ex.applied) {
+          const ok = a.success ? "OK" : "FAILED";
+          const out = mdEscape(a.output ?? a.error ?? "—").slice(0, 120);
+          lines.push(`| ${mdEscape(a.fixTitle)} | ${ok} | ${out} |`);
+        }
+        lines.push("");
+      }
+      if (ex.resolvedIds.length) {
+        lines.push(`Resolved steps: ${ex.resolvedIds.join(", ")}`);
+      }
+      if (ex.remainingIds.length) {
+        lines.push(`Remaining issues: ${ex.remainingIds.join(", ")}`);
+      }
+      lines.push("");
     }
   }
 

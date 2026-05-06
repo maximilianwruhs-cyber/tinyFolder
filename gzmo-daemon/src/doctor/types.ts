@@ -1,5 +1,12 @@
 export type DoctorProfile = "fast" | "standard" | "deep";
 
+export type HealingExecution = {
+  iteration: number;
+  applied: { fixId: string; fixTitle: string; appliedAt: string; success: boolean; output?: string; error?: string }[];
+  resolvedIds: string[];
+  remainingIds: string[];
+};
+
 export type StepStatus = "PASS" | "FAIL" | "WARN" | "SKIP";
 
 export interface DoctorStepResult {
@@ -50,4 +57,6 @@ export interface DoctorReport {
   runLegacy?: string;
   env: DoctorEnvironment;
   steps: DoctorStepResult[];
+  /** Healing execution history when --heal is active */
+  healingExecutions?: HealingExecution[];
 }
