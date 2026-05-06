@@ -8,14 +8,12 @@
  * - Chaos-aware LLM parameter modulation
  */
 
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { streamText } from "ai";
 import { type TaskStatus } from "./frontmatter";
 import type { TaskEvent } from "./watcher";
 import type { VaultWatcher } from "./watcher";
 import { resolve, relative } from "path";
 import type { ChaosSnapshot } from "./types";
-import { Phase } from "./types";
+import { Phase, defaultSnapshot } from "./types";
 import type { PulseLoop } from "./pulse";
 import type { EmbeddingStore } from "./embeddings";
 import { searchVaultHybrid, type SearchResult } from "./search";
@@ -37,25 +35,28 @@ import { shadowJudge } from "./shadow_judge";
 import { applyPartQueryHooks, applyPostAnswerHooks, applyPostEvidenceMultiHooks, defaultEngineHooks } from "./engine_hooks";
 import { routeJudgeMultipart } from "./route_judge";
 import { atomicWriteJson } from "./vault_fs";
-import { applyMindFilter } from "./mind_filter";
 import { SearchPipeline } from "./pipelines/search_pipeline";
 import { ThinkPipeline } from "./pipelines/think_pipeline";
-
-// ── Configuration ──────────────────────────────────────────
-function normalizeOllamaV1BaseUrl(raw: string | undefined): string {
-  const base0 = (raw ?? "http://localhost:11434/v1").replace(/\/$/, "");
-  return base0.endsWith("/v1") ? base0 : `${base0}/v1`;
-}
-
-const OLLAMA_BASE_URL = normalizeOllamaV1BaseUrl(process.env.OLLAMA_URL);
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "hermes3:8b";
-const OLLAMA_API_URL = normalizeOllamaV1BaseUrl(process.env.OLLAMA_URL).replace(/\/v1$/, "");
-
-// ── Provider Setup ─────────────────────────────────────────
-const ollama = createOpenAICompatible({
-  name: "ollama",
-  baseURL: OLLAMA_BASE_URL,
-});
+import { inferDetailed, OLLAMA_MODEL } from "./inference";
+export { infer, inferDetailed, type InferenceResult, OLLAMA_MODEL } from "./inference";
+import {
+  appendTraceIndex,
+  persistTrace,
+  tracesEnabled,
+  type ReasoningNode,
+  type ReasoningTrace,
+} from "./reasoning_trace";
+import { readBoolEnv } from "./pipelines/helpers";
+import { runSearchTot } from "./reasoning/run_tot_search";
+import {
+  appendStrategyEntry,
+  buildStrategyTips,
+  classifyTaskType,
+  extractDecompositionStyle,
+  formatStrategyContext,
+  learningEnabled,
+  loadLedger,
+} from "./learning/ledger";
 
 // ── Task Actions ───────────────────────────────────────────
 type TaskAction = "think" | "search" | "chain";
@@ -127,38 +128,6 @@ function extractExplicitVaultMdPaths(prompt: string): string[] {
   return uniq;
 }
 
-// ── Standalone Inference (for DreamEngine / SelfAsk) ────────
-export async function infer(system: string, prompt: string): Promise<string> {
-  // MIND pre-inference filter: normalize prompt structure and augment
-  // with Logic-of-Thought context before it reaches the LLM.
-  let inferPrompt = prompt;
-  const mindEnabled = String(process.env.GZMO_MIND_FILTER ?? "on").toLowerCase() !== "off";
-  if (mindEnabled) {
-    const mind = applyMindFilter(prompt, {
-      deep: String(process.env.GZMO_MIND_DEEP ?? "off").toLowerCase() === "on",
-    });
-    if (mind.applied) {
-      inferPrompt = mind.filtered;
-      console.log(`[MIND] Filter applied: ${mind.stats.conditionalsFound} conditionals, ${mind.stats.expansionsGenerated} expansions, ${mind.stats.fillerStripped} filler stripped`);
-    }
-  }
-
-  const result = streamText({
-    model: ollama(OLLAMA_MODEL),
-    system,
-    prompt: inferPrompt,
-  });
-  let text = "";
-  for await (const chunk of result.textStream) {
-    text += chunk;
-  }
-  // Strip out thinking blocks (Qwen3 emits both <think> and <thinking> formats)
-  text = text.replace(/<think>[\s\S]*?<\/think>\n?/g, "")
-    .replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "")
-    .trim();
-  return text;
-}
-
 // ── Task Processor (Smart Core) ────────────────────────────
 export async function processTask(
   event: TaskEvent,
@@ -193,9 +162,22 @@ export async function processTask(
     bodyLength: String(body ?? "").length,
   });
 
+  const traceId = crypto.randomUUID();
+  const traceNodes: ReasoningNode[] = [];
+  const taskRelPath = relative(resolve(vaultRoot), resolve(filePath)).replace(/\\/g, "/");
+
   try {
     const action = parseAction(frontmatter ?? {});
     console.log(`[ENGINE] Processing: ${fileName} (action: ${action})`);
+
+    const pushTrace = (n: Omit<ReasoningNode, "trace_id" | "timestamp"> & { timestamp?: string }) => {
+      if (!tracesEnabled()) return;
+      traceNodes.push({
+        ...(n as ReasoningNode),
+        trace_id: traceId,
+        timestamp: n.timestamp ?? new Date().toISOString(),
+      });
+    };
 
     await span("frontmatter.processing", () => document.markProcessing());
     const req = { event, pulse, embeddingStore, memory, hooks, vaultRoot };
@@ -203,41 +185,83 @@ export async function processTask(
     const pipeline = action === "search" ? new SearchPipeline() : new ThinkPipeline();
     const ctx = await pipeline.prepare(req);
 
-    const snap = pulse?.snapshot();
-    const temp = snap?.llmTemperature ?? 0.7;
-    const maxTok = snap?.llmMaxTokens ?? 400;
-    const valence = snap?.llmValence ?? 0;
-    console.log(`[ENGINE] Model: ${OLLAMA_MODEL} (temp: ${temp.toFixed(2)}, tokens: ${maxTok}, val: ${valence >= 0 ? "+" : ""}${valence.toFixed(2)}, phase: ${snap?.phase ?? "?"})`);
+    let strategyContext = "";
+    if (learningEnabled() && vaultRoot) {
+      const ledger = await loadLedger(vaultRoot, 200);
+      const taskType = classifyTaskType(body);
+      const tips = buildStrategyTips(ledger, taskType);
+      strategyContext = formatStrategyContext(tips);
+    }
+    const systemPromptWithStrategy = strategyContext ? `${ctx.systemPrompt}\n\n${strategyContext}` : ctx.systemPrompt;
+
+    const snap = pulse?.snapshot() ?? defaultSnapshot();
+    const temp = snap.llmTemperature ?? 0.7;
+    const maxTok = snap.llmMaxTokens ?? 400;
+    const valence = snap.llmValence ?? 0;
+    console.log(`[ENGINE] Model: ${OLLAMA_MODEL} (temp: ${temp.toFixed(2)}, tokens: ${maxTok}, val: ${valence >= 0 ? "+" : ""}${valence.toFixed(2)}, phase: ${snap.phase ?? "?"})`);
+
+    if (tracesEnabled()) {
+      pushTrace({
+        node_id: "n0",
+        parent_id: null,
+        type: "task_start",
+        depth: 0,
+        prompt_summary: `${fileName} (${action}): ${body.slice(0, 80)}${body.length > 80 ? "…" : ""}`,
+        outcome: "success",
+        elapsed_ms: 0,
+      });
+      pushTrace({
+        node_id: "n1",
+        parent_id: "n0",
+        type: "analyze",
+        depth: 1,
+        prompt_summary: `Pipeline ${action} prepared`,
+        outcome: "success",
+        elapsed_ms: 0,
+      });
+    }
+
+    let inferElapsed = 0;
+    const useTot = readBoolEnv("GZMO_ENABLE_TOT", false) && action === "search" && Boolean(embeddingStore);
 
     let rawOutput = ctx.deterministicAnswer;
     const usedDeterministic = Boolean(rawOutput);
-    
-    if (!usedDeterministic) {
-      // Apply MIND filter to the user prompt (normalizes linguistics, expands logic)
-      const mind = applyMindFilter(body);
-      const systemPrompt = ctx.systemPrompt;
-      
-      const result = streamText({
-        model: ollama(OLLAMA_MODEL),
-        system: systemPrompt,
-        prompt: mind.filtered,
-        temperature: temp,
-        maxTokens: maxTok,
-      } as any);
 
-      rawOutput = "";
-      await span("llm.stream", async () => {
-        for await (const chunk of result.textStream) {
-          rawOutput += chunk;
-        }
-      });
-      
-      rawOutput = rawOutput
-        .replace(/<think>[\s\S]*?<\/think>\n?/g, "")
-        .replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "")
-        .trim();
+    if (useTot && !usedDeterministic) {
+      const totOut = await span("reasoning.tot", async () =>
+        runSearchTot({
+          vaultRoot,
+          filePath,
+          body,
+          systemPrompt: systemPromptWithStrategy,
+          embeddingStore: embeddingStore!,
+          snap,
+          traceId,
+        }),
+      );
+      rawOutput = totOut.answer;
+      if (tracesEnabled()) traceNodes.push(...totOut.totFlatNodes);
+    } else if (!usedDeterministic) {
+      const inferResult = await span("llm.stream", async () =>
+        inferDetailed(systemPromptWithStrategy, body, { temperature: temp, maxTokens: maxTok }),
+      );
+      inferElapsed = inferResult.elapsed_ms;
+      rawOutput = inferResult.answer;
+      if (tracesEnabled() && inferResult.thinking) {
+        pushTrace({
+          node_id: `n${traceNodes.length}`,
+          parent_id: "n1",
+          type: "reason",
+          depth: 2,
+          prompt_summary: `LLM (temp=${temp.toFixed(2)}, maxTok=${maxTok})`,
+          raw_thinking: inferResult.thinking,
+          outcome: "success",
+          elapsed_ms: inferResult.elapsed_ms,
+          model: OLLAMA_MODEL,
+        });
+      }
     }
-    
+
     if (!rawOutput) {
       rawOutput = "_[GZMO produced internal reasoning but no visible output.]_";
     }
@@ -267,8 +291,36 @@ export async function processTask(
       }
     }
 
+    if (tracesEnabled()) {
+      pushTrace({
+        node_id: `n${traceNodes.length}`,
+        parent_id: "n1",
+        type: "verify",
+        depth: 2,
+        prompt_summary: "Post-processing: citations, safety, shape",
+        outcome: "success",
+        elapsed_ms: Math.max(0, Date.now() - startTime - inferElapsed),
+      });
+    }
+
+    if (tracesEnabled() && vaultRoot) {
+      const trace: ReasoningTrace = {
+        trace_id: traceId,
+        task_file: taskRelPath,
+        action,
+        model: OLLAMA_MODEL,
+        total_elapsed_ms: Date.now() - startTime,
+        nodes: traceNodes,
+        final_answer: fullText,
+        status: "completed",
+      };
+      await persistTrace(vaultRoot, trace).catch(() => {});
+      await appendTraceIndex(vaultRoot, trace).catch(() => {});
+    }
+
     memory?.record(fileName, fullText);
 
+    let routeJudgeMetrics: { score: number; partValidCitationRate: number } | undefined;
     if (action === "search") {
       const evidenceMulti = ctx.state.evidenceMulti;
       if (vaultRoot) {
@@ -281,6 +333,10 @@ export async function processTask(
               partValidCitationRate: judged.metrics.partValidCitationRate,
               partBackticksComplianceRate: judged.metrics.partBackticksComplianceRate,
               partAdversarialRejectRate: judged.metrics.partAdversarialRejectRate,
+            };
+            routeJudgeMetrics = {
+              score: judged.score,
+              partValidCitationRate: judged.metrics.partValidCitationRate,
             };
           }
         } catch {}
@@ -295,6 +351,30 @@ export async function processTask(
           route_judge: routeJudge,
         }).catch(() => {});
       }
+    }
+
+    if (learningEnabled() && vaultRoot) {
+      let decomposition = extractDecompositionStyle(traceNodes);
+      const analyzeHint = traceNodes.find((n) => n.type === "analyze" && /sub-task/i.test(n.prompt_summary));
+      if (analyzeHint) {
+        const s = analyzeHint.prompt_summary.toLowerCase();
+        if (/vault_read|read file/.test(s)) decomposition = "direct_read";
+        else if (/broad|general|overview/.test(s)) decomposition = "broad_scope";
+        else if (/narrow|specific|exact/.test(s)) decomposition = "narrow_scope";
+      }
+      await appendStrategyEntry(vaultRoot, {
+        task_type: classifyTaskType(body),
+        task_file: taskRelPath,
+        decomposition_style: decomposition,
+        used_tools: readBoolEnv("GZMO_ENABLE_TOOLS", false),
+        used_tot: useTot,
+        model: OLLAMA_MODEL,
+        ok: true,
+        z_score: routeJudgeMetrics?.score ?? 0,
+        citation_rate: routeJudgeMetrics?.partValidCitationRate ?? 0,
+        total_ms: Date.now() - startTime,
+        trace_id: traceId,
+      }).catch(() => {});
     }
 
     const durationMs = Date.now() - startTime;
@@ -329,6 +409,23 @@ export async function processTask(
 
   } catch (err: any) {
     try {
+      if (tracesEnabled() && vaultRoot) {
+        const failTrace: ReasoningTrace = {
+          trace_id: traceId,
+          task_file: taskRelPath,
+          action: parseAction(frontmatter ?? {}),
+          model: OLLAMA_MODEL,
+          total_elapsed_ms: Date.now() - startTime,
+          nodes: traceNodes,
+          final_answer: err?.message ?? "Unknown error",
+          status: "failed",
+        };
+        await persistTrace(vaultRoot, failTrace).catch(() => {});
+        await appendTraceIndex(vaultRoot, failTrace).catch(() => {});
+      }
+    } catch {}
+
+    try {
       if (vaultRoot) {
         appendTaskPerf(vaultRoot, {
           type: "task_perf",
@@ -341,6 +438,27 @@ export async function processTask(
         }).catch(() => {});
       }
     } catch {}
+
+    try {
+      if (learningEnabled() && vaultRoot) {
+        const actionFailed = parseAction(frontmatter ?? {});
+        const totOn = readBoolEnv("GZMO_ENABLE_TOT", false) && actionFailed === "search";
+        await appendStrategyEntry(vaultRoot, {
+          task_type: classifyTaskType(String(body ?? "")),
+          task_file: taskRelPath,
+          decomposition_style: "unknown",
+          used_tools: readBoolEnv("GZMO_ENABLE_TOOLS", false),
+          used_tot: totOn,
+          model: OLLAMA_MODEL,
+          ok: false,
+          z_score: 0,
+          citation_rate: 0,
+          total_ms: Date.now() - startTime,
+          trace_id: traceId,
+        }).catch(() => {});
+      }
+    } catch {}
+
     console.error(`[ENGINE] Failed: ${fileName} — ${err?.message}`);
 
     try {

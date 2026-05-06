@@ -30,6 +30,16 @@ export function verifySafety(params: {
 
   const evidenced = new Set(params.packet.allowedPaths.map((p) => normalize(p)));
 
+  // Tool / deterministic local_facts snippets may introduce paths — treat as evidenced.
+  for (const s of params.packet.snippets) {
+    if (s.kind !== "local_facts") continue;
+    const t = String(s.text ?? "");
+    if (!t.includes("[tool:")) continue;
+    for (const p of extractBacktickedPaths(t)) {
+      evidenced.add(normalize(p.replace(/\\/g, "/")));
+    }
+  }
+
   // 1) If the answer contains backticked paths, require them to be in evidence.
   for (const p of extractBacktickedPaths(a)) {
     const n = normalize(p.replace(/\\/g, "/"));

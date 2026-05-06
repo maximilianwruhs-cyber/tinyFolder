@@ -11,6 +11,7 @@ import { verifySafety } from "../verifier_safety";
 import { selfEvalAndRewrite } from "../self_eval";
 import { buildSystemPrompt, readBoolEnv, readIntEnv, isProofTask, extractExplicitVaultMdPaths } from "./helpers";
 import { OUTPUTS_REGISTRY } from "../outputs_registry";
+import type { ToolCallRecord } from "../tools/types";
 
 // Note: OLLAMA_API_URL and OLLAMA_MODEL need to be read or passed in. We'll use env for now.
 function getOllamaUrl() {
@@ -110,6 +111,25 @@ export class SearchPipeline implements TaskPipeline {
         && (allowDocs || !r.file.startsWith("docs/"))
       );
 
+      let toolResults: ToolCallRecord[] = [];
+      const enableTools = readBoolEnv("GZMO_ENABLE_TOOLS", false);
+      const maxToolCalls = readIntEnv("GZMO_MAX_TOOL_CALLS", 3, 0, 32);
+      if (enableTools && results.length === 0 && maxToolCalls > 0) {
+        const { dispatchTool } = await import("../tools/registry");
+        const ctx = { vaultPath: vaultRoot, taskFilePath: filePath };
+        const keywords = body.split(/\s+/).filter((w) => w.length > 4).slice(0, 3);
+        let calls = 0;
+        for (const kw of keywords) {
+          if (calls >= maxToolCalls) break;
+          const { record } = await dispatchTool("fs_grep", { pattern: kw, max_results: 5 }, ctx);
+          if (record.result.ok && record.result.output !== "(no matches)") {
+            toolResults.push(record);
+          }
+          calls++;
+        }
+      }
+      const toolFacts = toolResults.map((r) => `[tool:${r.tool}]\n${r.result.output}`).join("\n\n");
+
       const enableEvidence = readBoolEnv("GZMO_EVIDENCE_PACKET", true);
 
       let perPart: { idx: number; text: string; query: string; results: SearchResult[] }[] = [];
@@ -149,7 +169,7 @@ export class SearchPipeline implements TaskPipeline {
       }
 
       evidencePacket = spanSync("evidence.compile", () => compileEvidencePacket({
-          localFacts: [localFacts, vaultIndex, explicitFacts].filter(Boolean).join("\n"),
+          localFacts: [localFacts, vaultIndex, explicitFacts, toolFacts].filter(Boolean).join("\n"),
           results,
           maxSnippets: readIntEnv("GZMO_EVIDENCE_MAX_SNIPPETS", 10, 1, 20),
           maxSnippetChars: readIntEnv("GZMO_EVIDENCE_MAX_CHARS", 900, 200, 4000),
@@ -164,8 +184,8 @@ export class SearchPipeline implements TaskPipeline {
       const wantMulti = perPart.length > 0;
       if (wantMulti) {
         evidenceMulti = spanSync("evidence.compile.multi", () => compileEvidencePacketMulti({
-          localFacts: [localFacts, vaultIndex, explicitFacts].filter(Boolean).join("\n"),
-          globalResults: results,
+            localFacts: [localFacts, vaultIndex, explicitFacts, toolFacts].filter(Boolean).join("\n"),
+            globalResults: results,
           parts: perPart.map((p) => ({ idx: p.idx, text: p.text, results: p.results })),
           maxSnippets: readIntEnv("GZMO_EVIDENCE_MAX_SNIPPETS", 12, 1, 30),
           maxSnippetChars: readIntEnv("GZMO_EVIDENCE_MAX_CHARS", 900, 200, 4000),
@@ -190,7 +210,7 @@ export class SearchPipeline implements TaskPipeline {
       if ((results.length === 0 && perPart.every((p) => p.results.length === 0)) || !(Number.isFinite(minScore) ? bestTop >= minScore : true)) {
         if (wantMulti) {
           evidenceMulti = spanSync("evidence.compile.multi.failclosed", () => compileEvidencePacketMulti({
-            localFacts: [localFacts, vaultIndex].filter(Boolean).join("\n"),
+            localFacts: [localFacts, vaultIndex, toolFacts].filter(Boolean).join("\n"),
             globalResults: [],
             parts: perPart.map((p) => ({ idx: p.idx, text: p.text, results: [] })),
             maxSnippets: readIntEnv("GZMO_EVIDENCE_MAX_SNIPPETS", 12, 1, 30),
@@ -201,7 +221,7 @@ export class SearchPipeline implements TaskPipeline {
           evidencePacket = evidenceMulti.packet;
         } else {
           evidencePacket = spanSync("evidence.compile.failclosed", () => compileEvidencePacket({
-            localFacts: [localFacts, vaultIndex].filter(Boolean).join("\n"),
+            localFacts: [localFacts, vaultIndex, toolFacts].filter(Boolean).join("\n"),
             results: [],
             maxSnippets: readIntEnv("GZMO_EVIDENCE_MAX_SNIPPETS", 10, 1, 20),
             maxSnippetChars: readIntEnv("GZMO_EVIDENCE_MAX_CHARS", 900, 200, 4000),
@@ -211,7 +231,7 @@ export class SearchPipeline implements TaskPipeline {
 
       vaultContext = enableEvidence
         ? spanSync("evidence.render", () => evidenceMulti ? renderEvidencePacketMulti(evidenceMulti) : renderEvidencePacket(evidencePacket!))
-        : [localFacts, vaultIndex].filter(Boolean).join("\n");
+        : [localFacts, vaultIndex, toolFacts].filter(Boolean).join("\n");
 
       if (isProofTask(fileName)) {
         const opsOutputsIntent =

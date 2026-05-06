@@ -14,7 +14,10 @@
     "smoke:full": "bun run smoke && bun run proof:local-vault",
     "lint:once": "bun run lint_once.ts",
     "doctor": "bun run doctor.ts",
-    "autofix:sessions": "bun run autofix_sessions_subset.ts"
+    "autofix:sessions": "bun run autofix_sessions_subset.ts",
+    "trace:view": "bun run src/trace_viewer.ts",
+    "ledger:analyze": "bun run src/learning/analyze.ts",
+    "trace:sync": "bun run src/learning/sync_traces_cli.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

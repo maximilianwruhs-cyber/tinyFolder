@@ -26,6 +26,9 @@ import { describeRuntimeProfile, resolveRuntimeProfile } from "./src/runtime_pro
 import { EmbeddingsQueue } from "./src/embeddings_queue";
 import { writeHealth } from "./src/health";
 import { writeOpsOutputsArtifacts } from "./src/ops_outputs_artifact";
+import { readBoolEnv } from "./src/pipelines/helpers";
+import { atomicWriteJson } from "./src/vault_fs";
+import { invalidateEmbeddingSearchCache } from "./src/search";
 
 // ── Global Abort Controller (for graceful shutdown of in-flight inference) ──
 export const daemonAbort = new AbortController();
@@ -178,6 +181,21 @@ async function bootEmbeddings(): Promise<void> {
     console.log("[EMBED] Syncing vault embeddings...");
     const store = await embeddings.initByFullSync();
     stream.log(`📚 Vault indexed: ${store.chunks.length} chunks embedded.`);
+
+    if (readBoolEnv("GZMO_ENABLE_TRACE_MEMORY", false)) {
+      const { syncTracesIntoStore } = await import("./src/learning/sync_traces");
+      const added = await syncTracesIntoStore(VAULT_PATH, store, OLLAMA_API_URL);
+      if (added > 0) {
+        invalidateEmbeddingSearchCache(store);
+        await atomicWriteJson(VAULT_PATH, "GZMO/embeddings.json", store, 0);
+        store.dirty = false;
+      }
+    }
+
+    if (readBoolEnv("GZMO_LEARNING_BACKFILL", false)) {
+      const { backfillLedgerFromPerf } = await import("./src/learning/build_ledger");
+      await backfillLedgerFromPerf(VAULT_PATH, true);
+    }
   } catch (err: any) {
     console.warn(`[EMBED] Embedding sync failed (non-fatal): ${err?.message}`);
     console.warn("[EMBED] Vault search will be unavailable until embeddings sync.");

@@ -34,6 +34,7 @@ export interface EmbeddingChunk {
     retrievalPriority?: string;
     status?: string;
     updated?: string;
+    task_type?: string;
   };
 }
 

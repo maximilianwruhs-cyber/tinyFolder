@@ -69,6 +69,12 @@ function getBm25Index(store: EmbeddingStore) {
   return idx;
 }
 
+/** Call after mutating `store.chunks` outside normal embed paths (e.g. trace memory sync). */
+export function invalidateEmbeddingSearchCache(store: EmbeddingStore): void {
+  bm25Cache.delete(store);
+  anchorCache.delete(store);
+}
+
 function getAnchorIndex(store: EmbeddingStore) {
   const hit = anchorCache.get(store);
   if (hit) return hit;
