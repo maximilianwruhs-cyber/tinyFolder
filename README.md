@@ -253,7 +253,7 @@ This repo does **not** ship your vault content. You provide a vault directory an
 Minimum required directories:
 
 - `GZMO/Inbox/` (task inbox)
-- `GZMO/Dropzone/` (optional: arbitrary files the daemon routes into Inbox or `wiki/incoming/`)
+- `GZMO/Dropzone/` (optional: arbitrary files or nested folders the daemon routes into Inbox or `wiki/incoming/`)
 - `GZMO/Subtasks/` (chain sub-tasks)
 - `GZMO/Thought_Cabinet/` (dream/self-ask/etc artifacts)
 - `GZMO/Quarantine/` (optional, but used by some flows)
@@ -487,7 +487,7 @@ systemctl --user restart gzmo-daemon
 
 ### Dropzone (loose files)
 
-When the daemon runs with the inbox watcher enabled (so not in `heartbeat` / `GZMO_ENABLE_INBOX_WATCHER=0`) and `GZMO_ENABLE_DROPZONE` is not turned off, it watches **`$VAULT_PATH/GZMO/Dropzone/`** (top-level entries only):
+When the daemon runs with the inbox watcher enabled (so not in `heartbeat` / `GZMO_ENABLE_INBOX_WATCHER=0`) and `GZMO_ENABLE_DROPZONE` is not turned off, it watches **`$VAULT_PATH/GZMO/Dropzone/`** recursively (any nesting under the drop root). Only the daemon’s own subtrees at the **root** of Dropzone (`_processed/`, `_failed/`, `files/`, `_tmp/`) and dotfile paths are ignored, so a nested folder named `files/` inside a customer bundle is still ingested.
 
 - A **pending GZMO task** `.md` (`status: pending` and `action: think|search|chain`) is **moved into** `GZMO/Inbox/`.
 - Any other **Markdown** file is copied into **`wiki/incoming/`**, embedded when the store is available, then an **`action: search` follow-up task** is created so retrieval can cite the new page.
@@ -496,7 +496,7 @@ When the daemon runs with the inbox watcher enabled (so not in `heartbeat` / `GZ
 - **ZIP:** when `GZMO_DROPZONE_ZIP=on`, a dropped `.zip` is opened with bounded scanning; the first inner file matching the conversion allowlist is converted. Outer `.zip` bytes are still stored under `GZMO/Dropzone/files/`.
 - **Higher PDF fidelity (optional, not bundled):** the built-in path is text-layer extraction only. For difficult PDFs you can manually run a local tool (e.g. **Docling** or **Marker**) on files under `GZMO/Dropzone/files/` and move the resulting Markdown into `wiki/incoming/` yourself, or extend the daemon later with an explicit opt-in sidecar—there is no automatic cloud conversion in GZMO.
 
-Processed originals are moved to `GZMO/Dropzone/_processed/`; failures go to `GZMO/Dropzone/_failed/` when possible. Reserved under Dropzone: `_processed/`, `_failed/`, `files/`, `_tmp/` (ignored by the watcher). Set `GZMO_ENABLE_DROPZONE=0` to disable.
+Processed originals are moved to `GZMO/Dropzone/_processed/`; failures go to `GZMO/Dropzone/_failed/` when possible. Reserved **at the root** of Dropzone (not ingested, not descended into on boot): `_processed/`, `_failed/`, `files/`, `_tmp/`. Set `GZMO_ENABLE_DROPZONE=0` to disable.
 
 ### Golden minimal task (end-to-end verification)
 
