@@ -9,9 +9,9 @@ This file is the **control tower** for coding agents. It states non‑negotiable
 | Topic | Rule |
 |--------|------|
 | **Platform** | **Ubuntu Linux** (or similar with `systemctl --user`). Unsupported: Windows, macOS. |
-| **Integration** | **No HTTP task API.** Tasks are Markdown files under `$VAULT_PATH/GZMO/Inbox/` with YAML frontmatter (`status`, `action`, …). |
+| **Integration** | **Filesystem inbox is the contract** — tasks are Markdown under `$VAULT_PATH/GZMO/Inbox/` with YAML frontmatter (`status`, `action`, …). An optional HTTP layer only **mirrors** those files into the same Inbox (see README HTTP API); there is no separate task queue API. |
 | **`VAULT_PATH`** | Must be an **absolute** path in `gzmo-daemon/.env`. |
-| **Line endings** | Repo shell scripts are **LF**. If `install_service.sh` fails with `bash\r`, run: `sed -i 's/\r$//' install_service.sh scripts/*.sh gzmo-daemon/deploy_to_stick.sh`. |
+| **Line endings** | Repo shell scripts are **LF**. If `install_service.sh` fails with `bash\r`, run: `sed -i 's/\r$//' install_service.sh scripts/*.sh`. |
 | **User systemd unit** | Must **not** contain `User=%u` (causes **216/GROUP**). Regenerate with `./install_service.sh`. |
 
 ---
@@ -23,6 +23,9 @@ Use [README.md — Table of contents](README.md#table-of-contents) as the canoni
 | Goal | README section |
 |------|----------------|
 | Fastest path from zero | [First 5 minutes](README.md#first-5-minutes-copypaste-checklist) |
+| Pick an installer (human vs agent) | [Which installer?](README.md#which-installer-human-vs-agent) |
+| Repeatable fresh-machine setup | [Fresh machine agentic bootstrap](README.md#fresh-machine-agentic-bootstrap-recommended) |
+| Doctor / readiness wrapper | [Doctor (agentic readiness)](README.md#doctor-agentic-readiness) |
 | How tasks work (mental model) | [Mental model](README.md#mental-model) |
 | Bun, Ollama, models | [Prerequisites](README.md#prerequisites) |
 | `bun install` | [Install](README.md#install) |
@@ -36,6 +39,7 @@ Use [README.md — Table of contents](README.md#table-of-contents) as the canoni
 | Tests / eval | [Proof / smoke / eval commands](README.md#proof--smoke--eval-commands) |
 | Ollama, doctor, CRLF, 216, ExecStartPre | [Troubleshooting](README.md#troubleshooting) |
 | What’s in git | [Repo contents](README.md#repo-contents-what-is-public) |
+| Fine-tuning, perf baselines | [Additional documentation](README.md#additional-documentation) |
 | Pi / shell inbox scripts | [contrib/pi-gzmo-skill](contrib/pi-gzmo-skill/README.md) |
 
 ---
@@ -76,7 +80,7 @@ export GZMO_ENV_FILE="$REPO/gzmo-daemon/.env"
 
 1. [Prerequisites](README.md#prerequisites) — Bun, Ollama, pull models.
 2. [Install](README.md#install) — `cd gzmo-daemon && bun install`.
-3. [Create a vault scaffold](README.md#create-a-vault-scaffold) + [Configure](README.md#configure-environment-variables) — `.env` with absolute `VAULT_PATH`.
+3. Either follow [Create a vault scaffold](README.md#create-a-vault-scaffold) + [Configure](README.md#configure-environment-variables), or use [`./scripts/setup.sh`](README.md#which-installer-human-vs-agent) (`human` for full stack + wizard, `agent --vault …` for minimal bootstrap).
 4. [Run (foreground)](README.md#run-foreground) — Ollama + `bun run summon`.
 5. [Golden minimal task](README.md#golden-minimal-task-end-to-end-verification) — prove end‑to‑end.
 
@@ -93,7 +97,7 @@ export GZMO_ENV_FILE="$REPO/gzmo-daemon/.env"
 1. [Mental model](README.md#mental-model) — lifecycle `pending → processing → completed | failed`.
 2. [Submit tasks](README.md#submit-tasks-inbox-contract) — copy YAML patterns for `think` / `search` / `chain`.
 3. For `search`, respect the evidence / `[E#]` rules in Mental model.
-4. If stuck: [Troubleshooting](README.md#troubleshooting) + `cd gzmo-daemon && bun run doctor`.
+4. If stuck: [Troubleshooting](README.md#troubleshooting) + `cd gzmo-daemon && bun run doctor` (or from repo root: `./scripts/doctor-agentic.sh`).
 5. Inspect artifacts under `$VAULT_PATH/GZMO/` per [Operational outputs](README.md#operational-outputs-what-the-daemon-writes).
 
 ### D. Change behavior without code edits
@@ -115,7 +119,7 @@ Use this as a **order-of-operations** reminder; details and commands live in REA
 - [ ] `ollama pull` for `OLLAMA_MODEL` and `nomic-embed-text` if RAG/embeddings matter.
 - [ ] `cd gzmo-daemon && bun install`
 - [ ] `gzmo-daemon/.env`: absolute `VAULT_PATH`, `OLLAMA_URL`, `OLLAMA_MODEL`
-- [ ] Vault dirs: `GZMO/Inbox`, `Subtasks`, `Thought_Cabinet`, `Quarantine`, `wiki` (see scaffold section).
+- [ ] Vault dirs: `GZMO/Inbox`, `Subtasks`, `Thought_Cabinet`, `Quarantine`, `Reasoning_Traces`, `wiki` (see scaffold section).
 - [ ] Foreground **or** `./install_service.sh` + `systemctl --user enable --now gzmo-daemon`
 - [ ] Golden minimal task → `status: completed` and expected line in file body
 

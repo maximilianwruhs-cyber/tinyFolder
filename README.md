@@ -7,6 +7,9 @@ GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `searc
 ## Table of contents
 
 - [First 5 minutes (copy/paste checklist)](#first-5-minutes-copypaste-checklist)
+- [Which installer? (human vs agent)](#which-installer-human-vs-agent)
+- [Fresh machine agentic bootstrap](#fresh-machine-agentic-bootstrap-recommended)
+- [Doctor (agentic readiness)](#doctor-agentic-readiness)
 - [Mental model](#mental-model)
 - [Prerequisites](#prerequisites)
 - [Install](#install)
@@ -22,6 +25,7 @@ GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `searc
 - [Troubleshooting](#troubleshooting)
 - [Fine-tuning (advanced)](#fine-tuning-advanced)
 - [Repo contents (what is public)](#repo-contents-what-is-public)
+- [Additional documentation](#additional-documentation)
 - [Pi skill (optional)](#pi-skill-optional)
 - [License](#license)
 
@@ -53,6 +57,8 @@ bun install
 
 The wizard supports everything from CPU-only laptops up to the **NVIDIA DGX Spark** (128GB unified memory). On a DGX Spark it will auto-select a 70B–72B-class model (e.g. `qwen2.5:72b` or `llama3.3:70b`).
 
+Or get **stack + wizard** in one command (Bun/Ollama/models, then onboard): `./scripts/setup.sh human` — see [Which installer?](#which-installer-human-vs-agent).
+
 Or configure manually:
 
 ```bash
@@ -63,14 +69,12 @@ OLLAMA_MODEL="hermes3:8b"
 EOF
 ```
 
-4) Create the minimum vault scaffold:
+4) Create the minimum vault scaffold (skip dirs already created by **`./scripts/setup.sh human`**, **`./scripts/install-local-stack.sh`**, or **`./scripts/onboard.sh`** / the wizard):
 
 ```bash
-mkdir -p "/absolute/path/to/your/vault/GZMO/Inbox"
-mkdir -p "/absolute/path/to/your/vault/GZMO/Subtasks"
-mkdir -p "/absolute/path/to/your/vault/GZMO/Thought_Cabinet"
-mkdir -p "/absolute/path/to/your/vault/GZMO/Quarantine"
-mkdir -p "/absolute/path/to/your/vault/wiki"
+V="/absolute/path/to/your/vault"
+mkdir -p "$V/GZMO/Inbox" "$V/GZMO/Subtasks" "$V/GZMO/Thought_Cabinet" \
+         "$V/GZMO/Quarantine" "$V/GZMO/Reasoning_Traces" "$V/wiki"
 ```
 
 5) Run the daemon (foreground):
@@ -91,9 +95,36 @@ Expected success signal:
 
 ---
 
+## Which installer? (human vs agent)
+
+The repo ships **small scripts** plus one **thin router** — nothing is merged into a giant installer; the router only delegates.
+
+| You are… | Preferred path | What it runs |
+|----------|----------------|--------------|
+| **Human on a new machine** (GUI / full stack) | `./scripts/setup.sh human` | [`install-local-stack.sh`](scripts/install-local-stack.sh) (Bun/Ollama/models, `.env`, Pi extension symlink, systemd best-effort), then [`onboard.sh`](scripts/onboard.sh) (hardware-aware wizard; **interactive** in a terminal, **`--auto`** if stdin is not a TTY). |
+| **Agent / automation / “just give me a vault”** | `./scripts/setup.sh agent --vault /abs/path` | [`agentic-setup.sh`](scripts/agentic-setup.sh) — minimal `.env`, scaffold, `bun install`; optional `--force-env`, `--with-systemd`, `--with-pi`. |
+| **Health pass** | `./scripts/setup.sh doctor` | [`doctor-agentic.sh`](scripts/doctor-agentic.sh) (same flags as calling it directly). |
+
+Useful variants:
+
+```bash
+# Same as human, but skip the wizard (run ./scripts/onboard.sh yourself later)
+./scripts/setup.sh human --no-wizard
+
+# Force non-interactive wizard even in a terminal
+./scripts/setup.sh human --auto-wizard
+
+# Agent flow with systemd unit generation (still need daemon-reload/enable; script prints hints)
+./scripts/setup.sh agent --vault /abs/path/to/vault --force-env --with-systemd
+```
+
+Low-level scripts are unchanged; you can still invoke `install-local-stack.sh`, `onboard.sh`, and `agentic-setup.sh` directly.
+
+---
+
 ## Fresh machine agentic bootstrap (recommended)
 
-If you want this to be **repeatable** on a brand-new Ubuntu box (or a wiped dev VM), use the idempotent bootstrap script.
+If you want this to be **repeatable** on a brand-new Ubuntu box (or a wiped dev VM), use the idempotent bootstrap script (or the router: `./scripts/setup.sh agent …` — see [Which installer?](#which-installer-human-vs-agent)).
 
 Prereqs you still must install yourself:
 
@@ -104,13 +135,14 @@ Bootstrap (vault scaffold + `.env` + bun deps):
 
 ```bash
 VAULT="/absolute/path/to/your/vault"
-./scripts/agentic-setup.sh --vault "$VAULT" --force-env
+./scripts/setup.sh agent --vault "$VAULT" --force-env
+# equivalent: ./scripts/agentic-setup.sh --vault "$VAULT" --force-env
 ```
 
 Optional: also generate the **systemd user unit**:
 
 ```bash
-./scripts/agentic-setup.sh --vault "$VAULT" --with-systemd
+./scripts/setup.sh agent --vault "$VAULT" --with-systemd
 systemctl --user daemon-reload
 systemctl --user enable --now gzmo-daemon
 ```
@@ -118,7 +150,7 @@ systemctl --user enable --now gzmo-daemon
 Optional: also install the **Pi shell skill pack** into `~/.pi/skills/gzmo-daemon` (for `submit_task.sh` / `watch_task.sh` outside the extension). Pi **inside the repo** can use [`.pi/extensions/gzmo-tinyfolder.ts`](.pi/extensions/gzmo-tinyfolder.ts) instead; it registers the bundled skill under `.pi/extensions/skills/gzmo-daemon/` via `resources_discover` (no copy required for that path).
 
 ```bash
-./scripts/agentic-setup.sh --vault "$VAULT" --with-pi
+./scripts/setup.sh agent --vault "$VAULT" --with-pi
 export GZMO_ENV_FILE="$(pwd)/gzmo-daemon/.env"
 ```
 
@@ -133,7 +165,7 @@ export GZMO_ENV_FILE="$(pwd)/gzmo-daemon/.env"   # recommended
 ./scripts/doctor-agentic.sh
 ```
 
-Deep mode (slower, more checks):
+Deep profile (slower, more checks than the default fast pass):
 
 ```bash
 ./scripts/doctor-agentic.sh --deep
@@ -141,8 +173,9 @@ Deep mode (slower, more checks):
 
 Notes:
 
-- This wrapper delegates to the daemon’s deeper doctor (`cd gzmo-daemon && bun run doctor …`) after doing fast system checks.
-- `--write` is supported but **not recommended** unless you intentionally want write-enabled checks.
+- This wrapper runs quick host checks (Ollama reachability, vault dirs — it may **create** missing inbox scaffold folders), then delegates to the daemon (`cd gzmo-daemon && bun run doctor …`). By default it uses `--profile fast`; `--deep` switches to `--profile deep`.
+- `--write`, `--heal`, and `--no-bun-doctor` are passed through where applicable.
+- `--write` is supported but **not recommended** unless you intentionally want vault-writing checks.
 - `bun run doctor` writes reports to:
   - `"$VAULT_PATH/GZMO/doctor-report.md"` and `"$VAULT_PATH/GZMO/doctor-report.json"` (when vault-writing checks run)
   - `./gzmo/doctor-report.md` and `./gzmo/doctor-report.json` in the repo (gitignored)
@@ -363,7 +396,7 @@ View a trace (from `gzmo-daemon/` with `VAULT_PATH` set): `bun run trace:view --
 
 Ledger report: `bun run ledger:analyze` — sync traces into embeddings without full daemon boot: `bun run trace:sync`.
 
-Benchmark harness (temp vault, does not touch your real vault): `bun run benchmark` (optionally set `GZMO_BENCHMARK_RUNS=5`).
+Benchmark harness: see [Proof / smoke / eval commands](#proof--smoke--eval-commands) (`bun run benchmark`, optional `GZMO_BENCHMARK_RUNS`).
 
 ---
 
@@ -570,6 +603,9 @@ bun run eval:quality
 
 # local vault proof runner (reads your VAULT_PATH)
 bun run proof:local-vault
+
+# performance benchmark (temp vault; does not touch your real vault)
+GZMO_BENCHMARK_RUNS=5 bun run benchmark
 ```
 
 ---
@@ -623,11 +659,13 @@ cd gzmo-daemon
 bun run doctor
 ```
 
+From the **repo root**, you can use `./scripts/doctor-agentic.sh` instead (Ollama probe, vault scaffold fixes, then `bun run doctor` with a sane default profile). Details: [Doctor (agentic readiness)](#doctor-agentic-readiness).
+
 If your vault permissions are wrong, or `VAULT_PATH` is incorrect, the doctor output is usually the fastest way to pinpoint it.
 
 ### `install_service.sh` or shell scripts fail on Linux
 
-- **`env: bash\r` / bad interpreter**: the script has **CRLF** line endings. Fix with `sed -i 's/\r$//' install_service.sh scripts/*.sh gzmo-daemon/deploy_to_stick.sh` (or rely on [`.gitattributes`](.gitattributes) after a fresh clone).
+- **`env: bash\r` / bad interpreter**: the script has **CRLF** line endings. Fix with `sed -i 's/\r$//' install_service.sh scripts/*.sh` (or rely on [`.gitattributes`](.gitattributes) after a fresh clone).
 
 ### User service exits with `216/GROUP`
 
@@ -652,11 +690,22 @@ Quick overview of what's covered:
 - Importing Safetensors, GGUF, and adapters into Ollama
 - GZMO-specific Modelfile templates
 
+For ToT / latency methodology (benchmark harness), see [`docs/PERFORMANCE_BASELINE.md`](docs/PERFORMANCE_BASELINE.md).
+
 ---
 
 ## Repo contents (what is public)
 
-`gzmo-daemon/`, `scripts/`, `install_service.sh`, `README.md`, `AGENTS.md`, `LICENSE`, `.gitignore`, [`.gitattributes`](.gitattributes), [`.editorconfig`](.editorconfig), [`.pi/extensions/`](.pi/extensions/) (Pi extension + bundled `gzmo-daemon` skill), [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md) (optional shell/CI inbox helpers). Vault data stays local and is not in git.
+`gzmo-daemon/`, `scripts/` (includes [`setup.sh`](scripts/setup.sh) — see [Which installer?](#which-installer-human-vs-agent); other helpers include `boot-stack.sh`, `doctor-agentic.sh`, `push_learning_to_green.sh`, `start-ollama-optimized.sh`), `install_service.sh`, `README.md`, `AGENTS.md`, `LICENSE`, `.gitignore`, [`.gitattributes`](.gitattributes), [`.editorconfig`](.editorconfig), [`docs/`](docs/) (see [Additional documentation](#additional-documentation)), [`.pi/extensions/`](.pi/extensions/) (Pi extension + bundled `gzmo-daemon` skill; JS deps in [`package.json`](.pi/extensions/package.json) and lockfile **`bun.lock`** — run `bun install` in that directory when developing the extension), [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md) (optional shell/CI inbox helpers). Vault data stays local and is not in git.
+
+---
+
+## Additional documentation
+
+| Document | Purpose |
+|----------|---------|
+| [`docs/FINE_TUNING.md`](docs/FINE_TUNING.md) | Inference quality: prompts, LoRA, Modelfiles, Ollama import |
+| [`docs/PERFORMANCE_BASELINE.md`](docs/PERFORMANCE_BASELINE.md) | ToT / latency benchmark methodology (`bun run benchmark`) |
 
 ---
 

@@ -54,7 +54,6 @@ export interface DoctorReport {
   profile: DoctorProfile;
   readonly: boolean;
   writeReports: boolean;
-  runLegacy?: string;
   env: DoctorEnvironment;
   steps: DoctorStepResult[];
   /** Healing execution history when --heal is active */

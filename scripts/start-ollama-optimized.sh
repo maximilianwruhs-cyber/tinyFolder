@@ -2,9 +2,9 @@
 #
 # start-ollama-optimized.sh — Launch Ollama with KV-cache q8_0 + flash attention.
 #
-# References Phase 3 of IMPLEMENTATION_GUIDE.md. Halves the KV-cache footprint
-# and reduces memory pressure further with flash attention. Keep models loaded
-# indefinitely with KEEP_ALIVE=-1 so the daemon never pays a cold-start cost.
+# Halves the KV-cache footprint and reduces memory pressure further with flash
+# attention. Keep models loaded indefinitely with KEEP_ALIVE=-1 so the daemon
+# never pays a cold-start cost.
 #
 # Usage:
 #   ./scripts/start-ollama-optimized.sh                # default: ollama serve

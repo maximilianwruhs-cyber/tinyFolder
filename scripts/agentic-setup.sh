@@ -71,6 +71,7 @@ mkdir -p "$vault_path/GZMO/Inbox"
 mkdir -p "$vault_path/GZMO/Subtasks"
 mkdir -p "$vault_path/GZMO/Thought_Cabinet"
 mkdir -p "$vault_path/GZMO/Quarantine"
+mkdir -p "$vault_path/GZMO/Reasoning_Traces"
 mkdir -p "$vault_path/wiki"
 
 if [[ ! -f "$ENV_FILE" ]]; then

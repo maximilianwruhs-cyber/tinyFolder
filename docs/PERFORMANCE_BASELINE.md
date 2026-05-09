@@ -1,10 +1,12 @@
 # GZMO Performance Baseline
 
-Last updated: 2026-05-06
+Last updated: 2026-05-09
+
+See also: [README — Proof / smoke / eval commands](../README.md#proof--smoke--eval-commands).
 
 ## Methodology
 
-Run the built-in benchmark harness (creates a temp vault):
+Run the built-in benchmark harness (creates a temp vault; does not use your real `VAULT_PATH`):
 
 ```bash
 cd gzmo-daemon

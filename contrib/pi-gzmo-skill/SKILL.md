@@ -26,4 +26,4 @@ f=$(~/.pi/skills/gzmo-daemon/scripts/submit_task.sh think "Your prompt")
 ~/.pi/skills/gzmo-daemon/scripts/watch_task.sh "$f"
 ```
 
-**Chain:** `./scripts/submit_task.sh chain step2.md "body"`. Golden task wording: copy from [README golden minimal task](../../README.md#golden-minimal-task-end-to-end-verification).
+**Chain:** `~/.pi/skills/gzmo-daemon/scripts/submit_task.sh chain step2.md "body"`. Golden task wording: copy from [README golden minimal task](../../README.md#golden-minimal-task-end-to-end-verification).

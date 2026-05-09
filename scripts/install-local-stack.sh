@@ -2,7 +2,7 @@
 #
 # install-local-stack.sh — One-shot installer for the tinyFolder + pi local stack.
 #
-# Implements Phase 5 of IMPLEMENTATION_GUIDE.md:
+# Performs:
 #   - Installs Bun + Ollama if missing.
 #   - Pulls models for the requested profile (minimal / core / standard / full).
 #   - Scaffolds the vault under $VAULT (default: $HOME/vault).

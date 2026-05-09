@@ -21,7 +21,6 @@ import { parseDoctorFlags } from "./src/doctor/flags";
 import { runStep } from "./src/doctor/runner";
 import { discoverOllama, ollamaChatJson } from "./src/doctor/ollama";
 import { reportToMarkdown, writeDoctorReports } from "./src/doctor/report";
-import { runLegacy } from "./src/doctor/legacy";
 import type { DoctorEnvironment, DoctorReport, DoctorStepResult, HealingExecution } from "./src/doctor/types";
 import { applyHealing, compareStepSets, shouldHealAgain } from "./src/doctor/healer";
 
@@ -209,8 +208,6 @@ async function runDiagnostics(flags: ReturnType<typeof parseDoctorFlags>, env: D
   // 3) Unit tests (via bun test) in deep/standard; in fast we skip by default
   if (flags.profile === "fast") {
     steps.push({ id: "unit.tests", title: "Unit tests (bun test)", status: "SKIP", durationMs: 0, summary: "Skipped in fast profile" });
-  } else if (flags.runLegacy === "unit" || flags.runLegacy === "all") {
-    // handled by legacy runner below
   } else {
     steps.push(
       await runStep(stepCtx, {
@@ -509,39 +506,6 @@ async function runDiagnostics(flags: ReturnType<typeof parseDoctorFlags>, env: D
     }
   }
 
-  // 8) Optional legacy orchestration
-  if (flags.runLegacy) {
-    steps.push(
-      await runStep(stepCtx, {
-        id: "legacy.run",
-        title: `Legacy test orchestration (${flags.runLegacy})`,
-        timeoutMs: flags.profile === "deep" ? 600_000 : 240_000,
-        run: async (signal) => {
-          const res = await runLegacy({
-            kind: flags.runLegacy!,
-            cwd: import.meta.dir,
-            readonly: flags.readonly,
-            env: {
-              VAULT_PATH: env.vaultPath,
-              OLLAMA_URL: env.ollamaUrlV1 ?? "",
-              OLLAMA_MODEL: env.model ?? "",
-            },
-            signal,
-          });
-          const failures = Object.entries(res).filter(([, r]) => !r.ok && r.summary !== "Skipped (requires --write)");
-          const skipped = Object.values(res).filter((r) => r.summary === "Skipped (requires --write)").length;
-          const fix = Object.values(res).flatMap((r) => r.fix ?? []);
-          return {
-            status: failures.length ? "FAIL" : skipped ? "WARN" : "PASS",
-            summary: failures.length ? `${failures.length} legacy runs failed` : skipped ? `${skipped} legacy runs skipped (requires --write)` : "All legacy runs passed",
-            details: JSON.stringify(res, null, 2).slice(0, 6000),
-            fix: fix.length ? fix : undefined,
-          };
-        },
-      }),
-    );
-  }
-
   return { steps, ollamaOk, ollamaV1, model, store };
 }
 
@@ -628,7 +592,6 @@ async function main() {
     profile: flags.profile,
     readonly: flags.readonly,
     writeReports: flags.writeReports,
-    runLegacy: flags.runLegacy,
     env,
     steps: bag.steps,
     healingExecutions: flags.heal ? healingExecutions : undefined,

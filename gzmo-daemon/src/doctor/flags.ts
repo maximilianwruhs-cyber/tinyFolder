@@ -4,7 +4,6 @@ export interface DoctorFlags {
   profile: DoctorProfile;
   readonly: boolean;
   writeReports: boolean;
-  runLegacy?: "unit" | "pipeline" | "nightshift" | "stress" | "all";
   timeoutMs: number;
   heal: boolean;
   healRetries: number;
@@ -23,7 +22,6 @@ export function parseDoctorFlags(argv = process.argv.slice(2)): DoctorFlags {
   let profile: DoctorProfile = "deep";
   let readonly = true;
   let writeReports = true;
-  let runLegacy: DoctorFlags["runLegacy"] | undefined;
   let timeoutMs = 120_000;
   let heal = false;
   let healRetries = 3;
@@ -52,18 +50,6 @@ export function parseDoctorFlags(argv = process.argv.slice(2)): DoctorFlags {
 
     if (a === "--no-report") writeReports = false;
     if (a === "--report") writeReports = true;
-
-    if (a === "--run-legacy") {
-      const v = (args[i + 1] ?? "").trim().toLowerCase();
-      if (v === "unit" || v === "pipeline" || v === "nightshift" || v === "stress" || v === "all") runLegacy = v;
-      i++;
-      continue;
-    }
-    if (a.startsWith("--run-legacy=")) {
-      const v = (a.split("=", 2)[1] ?? "").trim().toLowerCase();
-      if (v === "unit" || v === "pipeline" || v === "nightshift" || v === "stress" || v === "all") runLegacy = v;
-      continue;
-    }
 
     if (a === "--heal") { heal = true; continue; }
     if (a === "--heal-retries") {
@@ -102,10 +88,5 @@ export function parseDoctorFlags(argv = process.argv.slice(2)): DoctorFlags {
     }
   }
 
-  // Safety: legacy runs are inherently write-y; require explicit --write
-  if (runLegacy && readonly) {
-    // Keep readonly, but the runner will SKIP writey legacy steps and report the requirement.
-  }
-
-  return { profile, readonly, writeReports, runLegacy, timeoutMs, heal, healRetries, healDelayMs };
+  return { profile, readonly, writeReports, timeoutMs, heal, healRetries, healDelayMs };
 }

@@ -424,6 +424,7 @@ ${fallbackSection}`;
     `${vaultPath}/GZMO/Subtasks`,
     `${vaultPath}/GZMO/Thought_Cabinet`,
     `${vaultPath}/GZMO/Quarantine`,
+    `${vaultPath}/GZMO/Reasoning_Traces`,
     `${vaultPath}/wiki`,
   ];
   let created = 0;
@@ -443,7 +444,7 @@ ${fallbackSection}`;
   } else {
     console.log("  1) Pull your model:    ollama pull " + chosen.id);
   }
-  console.log("  2) Start the daemon:   cd gzmo-daemon && bun run index.ts");
+  console.log("  2) Start the daemon:   cd gzmo-daemon && bun run summon");
   console.log("  3) Submit a task:      see README.md → Golden minimal task");
   console.log("");
 }
