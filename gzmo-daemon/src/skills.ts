@@ -12,7 +12,7 @@
 
 import { existsSync, readdirSync } from "fs";
 import * as path from "path";
-import matter from "gray-matter";
+import matter from "./yaml_frontmatter";
 
 export interface SkillEntry {
   name: string;

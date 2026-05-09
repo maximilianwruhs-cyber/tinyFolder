@@ -5,6 +5,7 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { InferenceResult, InferDetailedOptions } from "./inference";
 import { readBoolEnv } from "./pipelines/helpers";
+import { DEFAULT_TIMEOUTS } from "./lifecycle";
 
 export type ModelRole = "fast" | "reason" | "judge" | "rerank" | "default";
 
@@ -35,6 +36,16 @@ function resolveTag(role: ModelRole): string {
   }
 }
 
+/**
+ * Per-role default timeout (ms). `reason` gets the long budget; everything
+ * else uses the fast budget. Callers can still override with `opts.timeoutMs`.
+ */
+function defaultTimeoutForRole(role: ModelRole): number {
+  return role === "reason" || role === "default"
+    ? DEFAULT_TIMEOUTS.inferReason()
+    : DEFAULT_TIMEOUTS.inferFast();
+}
+
 /** Chat model instance for shadow judge / evaluate when routing is on or off. */
 export function getChatModelForRole(role: ModelRole = "default") {
   const ollama = createOpenAICompatible({ name: "ollama", baseURL: OLLAMA_BASE_URL });
@@ -50,7 +61,13 @@ export async function inferByRole(
   const { inferDetailed, inferDetailedWithModel } = await import("./inference");
 
   if (!modelRoutingEnabled()) {
-    return inferDetailed(system, prompt, opts);
+    // R2: even when routing is off, callers should still get the role-appropriate
+    // timeout (e.g. fast=30s) instead of always falling back to the 120s reason budget.
+    const passOpts: InferDetailedOptions = {
+      ...opts,
+      timeoutMs: opts?.timeoutMs ?? defaultTimeoutForRole(role),
+    };
+    return inferDetailed(system, prompt, passOpts);
   }
 
   const ollama = createOpenAICompatible({ name: "ollama", baseURL: OLLAMA_BASE_URL });
@@ -61,6 +78,8 @@ export async function inferByRole(
     ...opts,
     temperature: opts?.temperature ?? (role === "judge" ? 0.1 : role === "fast" ? 0.5 : 0.6),
     maxTokens: opts?.maxTokens ?? (role === "judge" ? 200 : role === "fast" ? 300 : 600),
+    // R2: pick a sensible per-role timeout when the caller didn't specify one.
+    timeoutMs: opts?.timeoutMs ?? defaultTimeoutForRole(role),
   };
 
   return inferDetailedWithModel(model, system, prompt, mergedOpts);

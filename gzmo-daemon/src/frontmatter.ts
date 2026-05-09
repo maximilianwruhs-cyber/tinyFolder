@@ -1,7 +1,7 @@
 /**
  * frontmatter.ts — Lossless YAML frontmatter state machine.
  *
- * Uses gray-matter for symmetrical read/write so the daemon
+ * Uses ./yaml_frontmatter (yaml-package wrapper) for symmetrical read/write so the daemon
  * can update `status: pending` → `processing` → `completed`
  * without corrupting the user's markdown body.
  *
@@ -9,8 +9,9 @@
  * read/write via io_uring — no event loop blocking.
  */
 
-import matter from "gray-matter";
+import matter from "./yaml_frontmatter";
 import { write } from "bun";
+import { lstat } from "fs/promises";
 
 export type TaskStatus = "pending" | "processing" | "completed" | "failed" | "cancelled";
 
@@ -34,6 +35,19 @@ export class TaskDocument {
 
   static async load(filePath: string): Promise<TaskDocument | null> {
     try {
+      // T4-H: refuse to follow symlinks. The watcher already passes
+      // `followSymlinks: false` to chokidar, but the HTTP API path bypasses
+      // chokidar entirely, so this lstat guard is the second line of defense.
+      try {
+        const st = await lstat(filePath);
+        if (st.isSymbolicLink()) {
+          console.warn(`[FRONTMATTER] Refusing to load symlink: ${filePath}`);
+          return null;
+        }
+      } catch {
+        // Stat error → let Bun.file() report the underlying problem below.
+      }
+
       const raw = await Bun.file(filePath).text();
       const parsed = matter(raw);
 
@@ -79,6 +93,18 @@ export class TaskDocument {
     this.frontmatter.completed_at = new Date().toISOString();
     const formattedError = `\n---\n\n## ❌ Error\n\`\`\`\n${errorMessage}\n\`\`\``;
     this.body = this.body.trimEnd() + "\n" + formattedError;
+    await this.save();
+  }
+
+  /**
+   * Reset a task that was left in `processing` after an unclean shutdown back
+   * to `pending`, clearing `started_at` and recording when the recovery ran.
+   * Used by boot-time recovery; the watcher's initial scan will then redispatch.
+   */
+  async markPendingRecovered(now: Date = new Date()): Promise<void> {
+    this.frontmatter.status = "pending";
+    delete this.frontmatter.started_at;
+    this.frontmatter.recovered_at = now.toISOString();
     await this.save();
   }
 

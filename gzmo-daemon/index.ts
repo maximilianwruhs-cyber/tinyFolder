@@ -31,9 +31,15 @@ import { atomicWriteJson } from "./src/vault_fs";
 import { invalidateEmbeddingSearchCache } from "./src/search";
 import { startApiServer } from "./src/api_server";
 import type { Server } from "bun";
+import { recoverStaleProcessing } from "./src/boot_recovery";
+import { daemonAbort } from "./src/lifecycle";
+import { TaskSemaphore, readTaskConcurrency } from "./src/task_semaphore";
+import { sweepOldTraces } from "./src/reasoning_trace";
+import { startVramProbe, stopVramProbe } from "./src/vram_probe";
 
-// ── Global Abort Controller (for graceful shutdown of in-flight inference) ──
-export const daemonAbort = new AbortController();
+// Re-export so any existing tooling that imported `daemonAbort` from index.ts
+// keeps working. The canonical home is now ./src/lifecycle.
+export { daemonAbort };
 
 // ── Resolve Vault Path ─────────────────────────────────────
 const VAULT_PATH = process.env.VAULT_PATH ?? resolve(import.meta.dir, "../vault");
@@ -210,13 +216,24 @@ const watcher = new VaultWatcher(INBOX_PATH);
 // ── HTTP API server (declared here, started after Ollama gate when enabled) ──
 let apiServer: Server<unknown> | undefined;
 
+// R4: track auxiliary watchers / closeables so shutdown can drain them.
+let embedWatcher: import("chokidar").FSWatcher | undefined;
+
 let activeTaskCount = 0;
 let lastTaskCompletedAt = 0;
 
+// R3: cap concurrent task processing. Default 1 — single-user GPUs almost
+// always want one model running at a time. Override via GZMO_TASK_CONCURRENCY.
+const taskSem = new TaskSemaphore(readTaskConcurrency());
+console.log(`[TASKS] Concurrency limit: ${taskSem.limit}`);
+
 watcher.on("task", async (event) => {
   if (!runtime.enableTaskProcessing) return;
-  activeTaskCount++;
   const action = event.frontmatter?.action ?? "think";
+  // Acquire BEFORE bumping the active counter / logging "claimed" so dashboards
+  // accurately reflect what's actually running vs queued.
+  await taskSem.acquire();
+  activeTaskCount++;
   stream.log(`📥 Task claimed: **${event.fileName}** (${action})`);
   try {
     await processTask(event, watcher, pulse, embeddings.getStore(), memory);
@@ -227,8 +244,10 @@ watcher.on("task", async (event) => {
     }
   } catch (err: any) {
     stream.log(`❌ Task failed: **${event.fileName}** — ${err?.message}`);
+  } finally {
+    activeTaskCount--;
+    taskSem.release();
   }
-  activeTaskCount--;
   if (activeTaskCount === 0) stream.log("💤 Idle. Waiting for tasks...");
 });
 
@@ -268,7 +287,7 @@ async function inboxHasPending(): Promise<boolean> {
   if (embeddings.getStore() && runtime.enableEmbeddingsLiveSync) {
     const chokidarMod = await import("chokidar");
     const { watch } = chokidarMod;
-    const embedWatcher = watch([join(VAULT_PATH, "wiki"), join(VAULT_PATH, "GZMO", "Thought_Cabinet")], {
+    embedWatcher = watch([join(VAULT_PATH, "wiki"), join(VAULT_PATH, "GZMO", "Thought_Cabinet")], {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 2000, pollInterval: 500 },
     });
@@ -309,6 +328,38 @@ async function inboxHasPending(): Promise<boolean> {
   }
 
   if (runtime.enableInboxWatcher) {
+    // R1: Recover tasks left in `processing` after an unclean shutdown.
+    // Must run BEFORE watcher.start() so the watcher's initial scan re-dispatches them.
+    try {
+      const failOnRecover = readBoolEnv("GZMO_RECOVERY_FAIL_ON_RESTART", false);
+      const graceMs = Number.parseInt(process.env.GZMO_RECOVERY_GRACE_MS ?? "30000", 10) || 30_000;
+      const recovery = await recoverStaleProcessing(INBOX_PATH, { graceMs, failOnRecover });
+      if (recovery.recovered.length > 0) {
+        const verb = failOnRecover ? "marked failed" : "reset to pending";
+        console.log(
+          `[RECOVERY] ${recovery.recovered.length} stale 'processing' task(s) ${verb} after restart.`,
+        );
+        stream.log(`♻️ Boot recovery: ${recovery.recovered.length} stale task(s) ${verb}.`);
+      }
+      if (recovery.skipped.length > 0) {
+        console.log(
+          `[RECOVERY] ${recovery.skipped.length} 'processing' task(s) within grace window — left as-is.`,
+        );
+      }
+    } catch (err: any) {
+      console.warn(`[RECOVERY] Boot recovery failed (non-fatal): ${err?.message ?? err}`);
+    }
+
+    // R5: opt-in trace retention. No-op when GZMO_TRACE_RETAIN_DAYS is unset / 0.
+    try {
+      const deleted = await sweepOldTraces(VAULT_PATH);
+      if (deleted.length > 0) {
+        console.log(`[RETENTION] Pruned ${deleted.length} reasoning trace(s) older than retention window.`);
+      }
+    } catch (err: any) {
+      console.warn(`[RETENTION] Trace sweep failed (non-fatal): ${err?.message ?? err}`);
+    }
+
     watcher.start();
   } else {
     console.log("[WATCHER] Inbox watcher disabled by profile.");
@@ -323,6 +374,19 @@ async function inboxHasPending(): Promise<boolean> {
     }
   } else {
     console.log("[API] Disabled (set GZMO_API_ENABLED=1 in .env to enable).");
+  }
+
+  // T4-A: start the live VRAM probe last. In `auto` mode this is a no-op when
+  // nvidia-smi is unavailable, so the env-var bridge keeps working unchanged.
+  try {
+    const probe = await startVramProbe();
+    if (probe.mode === "nvidia-smi") {
+      console.log(`[VRAM] Live probe enabled via nvidia-smi (every ${probe.intervalMs}ms).`);
+    } else {
+      console.log(`[VRAM] Live probe disabled (mode=${probe.mode}); falling back to GZMO_VRAM_* env vars.`);
+    }
+  } catch (err: any) {
+    console.warn(`[VRAM] Probe failed to start (non-fatal): ${err?.message ?? err}`);
   }
 })();
 
@@ -565,10 +629,36 @@ setInterval(async () => {
 }, 60_000);
 
 // ── Graceful Shutdown ──────────────────────────────────────
+
+let shuttingDown = false;
+
+/** Wait until `cond()` returns true OR `timeoutMs` elapses, polling every `intervalMs`. */
+async function waitFor(cond: () => boolean, timeoutMs: number, intervalMs = 100): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return true;
+}
+
 async function shutdown(signal: string) {
-  console.log(`\n[DAEMON] Received ${signal}. Shutting down...`);
+  if (shuttingDown) return; // Idempotent — multiple SIGINTs collapse to one drain.
+  shuttingDown = true;
+
+  const drainMs = Number.parseInt(process.env.GZMO_SHUTDOWN_DRAIN_MS ?? "10000", 10) || 10_000;
+  console.log(`\n[DAEMON] Received ${signal}. Draining (max ${drainMs}ms)...`);
   stream.log(`🔴 Daemon shutting down (${signal}).`);
-  daemonAbort.abort();
+
+  // 1. Stop accepting new work: close watchers FIRST so chokidar doesn't enqueue
+  //    fresh "add"/"change" events while we're trying to drain.
+  try { await watcher.stop(); } catch (err: any) { console.warn(`[WATCHER] Stop error: ${err?.message ?? err}`); }
+  if (embedWatcher) {
+    try { await embedWatcher.close(); } catch (err: any) { console.warn(`[EMBED] Stop error: ${err?.message ?? err}`); }
+    embedWatcher = undefined;
+  }
+
+  // 2. Stop the HTTP API so no new tasks/searches arrive via the API path.
   if (apiServer) {
     try {
       console.log("[API] Stopping server...");
@@ -577,9 +667,33 @@ async function shutdown(signal: string) {
       console.warn(`[API] Stop error: ${err?.message ?? err}`);
     }
   }
+
+  // 3. Wait for in-flight tasks to finish (or hit the drain budget).
+  if (activeTaskCount > 0) {
+    console.log(`[DAEMON] Waiting for ${activeTaskCount} task(s) to complete...`);
+    const tasksDone = await waitFor(() => activeTaskCount === 0, drainMs);
+    if (!tasksDone) {
+      console.warn(`[DAEMON] ${activeTaskCount} task(s) still running after drain budget — aborting in-flight LLM work.`);
+    }
+  }
+
+  // 4. Now signal abort: any LLM stream still running will throw cleanly via R2.
+  daemonAbort.abort();
+
+  // 5. Wait for the embedding queue to flush (bounded — embeddings are best effort).
+  try {
+    await Promise.race([
+      embeddings.whenIdle(),
+      new Promise<void>((r) => setTimeout(r, Math.min(drainMs, 5000))),
+    ]);
+  } catch { /* ignore */ }
+
+  // 6. Tear down periodic loops + stream.
+  stopVramProbe();
   stream.destroy();
   pulse?.stop();
-  await watcher.stop();
+
+  console.log("[DAEMON] Shutdown complete.");
   process.exit(0);
 }
 process.on("SIGINT", () => shutdown("SIGINT"));

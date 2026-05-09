@@ -18,7 +18,7 @@
 import { join, basename } from "path";
 import { existsSync, mkdirSync } from "fs";
 import { promises as fsp } from "fs";
-import matter from "gray-matter";
+import matter from "./yaml_frontmatter";
 import type { EmbeddingStore } from "./embeddings";
 import { searchVault, formatSearchContext } from "./search";
 import { atomicWriteJson, safeWriteText, resolveVaultPath } from "./vault_fs";

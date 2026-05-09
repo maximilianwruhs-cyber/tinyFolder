@@ -27,6 +27,9 @@ export async function rewriteQuery(params: {
     const result = await inferByRole("fast", system, params.query, {
       temperature: 0.2,
       maxTokens: 160,
+      // R2: actually honour the advertised timeout so a hung Ollama can never
+      // block search even when GZMO_MULTIQUERY=on.
+      timeoutMs,
     });
 
     const content = result.answer.trim();

@@ -3,152 +3,39 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
-import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
-import { matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
+import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { matchesKey, Text } from "@mariozechner/pi-tui";
 import { Type, type Static } from "typebox";
 
+// T4-C: helpers, API client, dashboard, and renderer accessor moved to
+// siblings. The entry now owns command/tool registration, session lifecycle,
+// and the SSE/inbox plumbing that genuinely needs Pi context.
+import {
+  type GzmoAction,
+  asNonEmptyString,
+  fileExists,
+  resolveVaultPath,
+  parseDotEnvFile,
+  walkForEnv,
+  makeTaskFrontmatter,
+  parseFrontmatter,
+  readTaskStatus,
+  tailLines,
+  extractInjectedContext,
+  listInbox,
+  type TaskRow,
+} from "./gzmo_shared";
+import { GzmoApiClient, type ApiHealthShape } from "./gzmo_api_client";
+import {
+  GzmoDashboardComponent,
+  type DashboardState,
+  fetchDashboardState,
+  getDashboardRenderer,
+  setDashboardRenderer,
+  updateUiStatus,
+} from "./gzmo_dashboard";
+
 const extensionDir = path.dirname(fileURLToPath(import.meta.url));
-
-type GzmoAction = "think" | "search" | "chain";
-
-/* ── helpers ── */
-
-function asNonEmptyString(v: unknown): string | null {
-  if (typeof v !== "string") return null;
-  const t = v.trim();
-  return t.length ? t : null;
-}
-
-function isAbsPosixOrNative(p: string): boolean {
-  return path.isAbsolute(p);
-}
-
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    await fsp.stat(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function parseDotEnvFile(envFile: string): Promise<Record<string, string>> {
-  const raw = await fsp.readFile(envFile, "utf8");
-  const out: Record<string, string> = {};
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq <= 0) continue;
-    const key = trimmed.slice(0, eq).trim();
-    let val = trimmed.slice(eq + 1).trim();
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-      val = val.slice(1, -1);
-    }
-    out[key] = val;
-  }
-  return out;
-}
-
-async function walkForEnv(startDir: string): Promise<string | null> {
-  let dir = path.resolve(startDir);
-  while (true) {
-    const env1 = path.join(dir, ".env");
-    if (await fileExists(env1)) return env1;
-    const env2 = path.join(dir, "gzmo-daemon", ".env");
-    if (await fileExists(env2)) return env2;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-
-async function resolveVaultPath(): Promise<{ vaultPath: string; envFile?: string }> {
-  const envFromProcess = asNonEmptyString(process.env.VAULT_PATH);
-  const envFileOverride = asNonEmptyString(process.env.GZMO_ENV_FILE);
-
-  if (envFileOverride && (await fileExists(envFileOverride))) {
-    const parsed = await parseDotEnvFile(envFileOverride);
-    const vp = asNonEmptyString(parsed["VAULT_PATH"]);
-    if (!vp) throw new Error(`GZMO_ENV_FILE set but VAULT_PATH missing: ${envFileOverride}`);
-    if (!isAbsPosixOrNative(vp)) throw new Error(`VAULT_PATH must be absolute (got: ${vp})`);
-    return { vaultPath: vp, envFile: envFileOverride };
-  }
-
-  if (envFromProcess) {
-    if (!isAbsPosixOrNative(envFromProcess)) throw new Error(`VAULT_PATH must be absolute (got: ${envFromProcess})`);
-    return { vaultPath: envFromProcess };
-  }
-
-  const walked = await walkForEnv(process.cwd());
-  if (!walked) {
-    throw new Error(
-      "No .env found. Set GZMO_ENV_FILE=/path/to/gzmo-daemon/.env or set VAULT_PATH, or run Pi from within the tinyFolder repo tree.",
-    );
-  }
-  const parsed = await parseDotEnvFile(walked);
-  const vp = asNonEmptyString(parsed["VAULT_PATH"]);
-  if (!vp) throw new Error(`VAULT_PATH not set after sourcing: ${walked}`);
-  if (!isAbsPosixOrNative(vp)) throw new Error(`VAULT_PATH must be absolute (got: ${vp})`);
-  return { vaultPath: vp, envFile: walked };
-}
-
-function makeTaskFrontmatter(action: GzmoAction, chainNext?: string): string {
-  if (action === "chain") {
-    const cn = asNonEmptyString(chainNext);
-    if (!cn) throw new Error("chain_next is required when action=chain");
-    return `---\nstatus: pending\naction: chain\nchain_next: ${cn}\n---\n`;
-  }
-  return `---\nstatus: pending\naction: ${action}\n---\n`;
-}
-
-function parseFrontmatter(md: string): { frontmatter: Record<string, string>; body: string } {
-  const lines = md.split(/\r?\n/);
-  if (lines[0] !== "---") return { frontmatter: {}, body: md };
-  let i = 1;
-  const fm: Record<string, string> = {};
-  for (; i < lines.length; i++) {
-    const line = lines[i];
-    if (line === "---") {
-      i++;
-      break;
-    }
-    const idx = line.indexOf(":");
-    if (idx <= 0) continue;
-    const key = line.slice(0, idx).trim();
-    let val = line.slice(idx + 1).trim();
-    val = val.replace(/^['"]|['"]$/g, "");
-    fm[key] = val;
-  }
-  return { frontmatter: fm, body: lines.slice(i).join("\n") };
-}
-
-async function readTaskStatus(taskPath: string): Promise<string | null> {
-  const md = await fsp.readFile(taskPath, "utf8");
-  const { frontmatter } = parseFrontmatter(md);
-  return asNonEmptyString(frontmatter["status"]);
-}
-
-async function tailLines(filePath: string, maxLines: number): Promise<string> {
-  const md = await fsp.readFile(filePath, "utf8");
-  const lines = md.split(/\r?\n/);
-  return lines.slice(Math.max(0, lines.length - maxLines)).join("\n");
-}
-
-function tailLineArray(fileText: string, maxLines: number): string[] {
-  const lines = fileText.split(/\r?\n/);
-  return lines.slice(Math.max(0, lines.length - maxLines));
-}
-
-function extractInjectedContext(markdown: string): string {
-  const { body } = parseFrontmatter(markdown);
-  const b = body.trimStart();
-  const evIdx = b.indexOf("## Evidence Packet");
-  if (evIdx >= 0) return b.slice(evIdx).trim();
-  const respIdx = b.indexOf("## GZMO Response");
-  if (respIdx >= 0) return b.slice(respIdx).trim();
-  return b.trim();
-}
 
 /* ── session-scoped state ── */
 
@@ -163,12 +50,10 @@ const sessionLiveWatch = new Map<string, SessionUiHandles>();
 const sessionNotifyPaths = new Map<string, Set<string>>();
 const sessionSseClose = new Map<string, () => void>();
 
-/**
- * If the /gzmo dashboard is currently mounted, its TUI handle lives here so
- * external events (SSE task_completed) can poke `requestRender()` / `refresh()`.
- * The /gzmo handler must null this on close to avoid stale-closure crashes.
- */
-let dashboardRenderer: { requestRender: () => void; refresh: () => Promise<void> } | null = null;
+// T4-C: dashboard renderer reference now lives in `./gzmo_dashboard` behind a
+// getter/setter pair (`getDashboardRenderer` / `setDashboardRenderer`) so the
+// entry no longer holds mutable cross-file state. The /gzmo handler still
+// owns the lifecycle: setDashboardRenderer({...}) on open, setDashboardRenderer(null) on close.
 
 function getSessionHandles(sessionId: string): SessionUiHandles {
   let h = sessionLiveWatch.get(sessionId);
@@ -250,8 +135,9 @@ async function attachApiSseListener(pi: ExtensionAPI, ctx: ExtensionContext, ses
     // Update footer status + dashboard FIRST so the UI reflects the new
     // counts/model/VRAM before the chat message render is queued.
     void updateUiStatus(ctx);
-    if (dashboardRenderer) {
-      void dashboardRenderer.refresh();
+    const renderer = getDashboardRenderer();
+    if (renderer) {
+      void renderer.refresh();
     }
     pi.sendMessage(
       {
@@ -383,430 +269,7 @@ function mkTaskFilename(): string {
   return `${ts}_${rand}.md`;
 }
 
-/* ── GZMO HTTP API client (Phase 2) ─────────────────────────────── */
-
-type ApiClientEnv = {
-  baseUrl: string;
-  socketPath: string | null;
-};
-
-function readApiClientEnv(): ApiClientEnv {
-  const socket = asNonEmptyString(process.env.GZMO_API_SOCKET) ?? "";
-  const host = asNonEmptyString(process.env.GZMO_API_HOST) ?? "127.0.0.1";
-  const port = asNonEmptyString(process.env.GZMO_API_PORT) ?? "12700";
-  if (socket && fs.existsSync(socket)) return { baseUrl: `http://unix:${socket}`, socketPath: socket };
-  return { baseUrl: `http://${host}:${port}`, socketPath: null };
-}
-
-type ApiSubmitOk = { ok: true; id: string; path?: string; status: string };
-type ApiCallErr = { ok: false; error: string; status?: number };
-type ApiHealthOk = { ok: true; data: ApiHealthShape };
-type ApiTaskOk = { ok: true; data: ApiTaskShape };
-type ApiSearchOk = { ok: true; answer: string; evidence?: string; trace_id?: string; task_path?: string };
-
-type ApiHealthShape = {
-  status: string;
-  version: string;
-  ollama_connected: boolean;
-  model_loaded: string;
-  embedding_model?: string;
-  pending_tasks: number;
-  processing_tasks: number;
-  uptime_seconds: number;
-  vault_path?: string;
-  vram_used_mb?: number;
-  vram_total_mb?: number;
-};
-
-type ApiTaskShape = {
-  id: string;
-  status: string;
-  action?: string;
-  body?: string;
-  output?: string;
-  evidence?: string;
-  error?: string;
-  started_at?: string;
-  completed_at?: string;
-  path?: string;
-};
-
-type ApiSearchAccepted = {
-  id: string;
-  status: string;
-  action: "search";
-  path: string;
-  stream_url: string;
-  task_url: string;
-};
-
-type ApiEventShape = {
-  type: "task_created" | "task_started" | "task_completed" | "task_failed" | "token" | "log";
-  task_id?: string;
-  data?: unknown;
-  timestamp: string;
-};
-
-/**
- * Wait for an API task to reach `completed` or `failed`, primarily by
- * subscribing to the daemon SSE stream. A periodic poll of /api/v1/task/:id
- * acts as a backstop so callers still finish if SSE drops the event (network
- * blip, idle reconnect, etc.). Either path is sufficient on its own.
- */
-async function waitForApiTaskTerminal(
-  client: GzmoApiClient,
-  taskId: string,
-  maxSec: number,
-  pollSec: number,
-  signal?: AbortSignal,
-): Promise<"completed" | "failed"> {
-  return await new Promise<"completed" | "failed">((resolve, reject) => {
-    let settled = false;
-    let closeSse: (() => void) | null = null;
-    let pollTimer: NodeJS.Timeout | null = null;
-    let deadlineTimer: NodeJS.Timeout | null = null;
-    let abortHandler: (() => void) | null = null;
-
-    const cleanup = () => {
-      if (closeSse) {
-        try { closeSse(); } catch { /* ignore */ }
-        closeSse = null;
-      }
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
-      if (deadlineTimer) {
-        clearTimeout(deadlineTimer);
-        deadlineTimer = null;
-      }
-      if (abortHandler && signal) {
-        signal.removeEventListener("abort", abortHandler);
-        abortHandler = null;
-      }
-    };
-
-    const finish = (s: "completed" | "failed") => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(s);
-    };
-
-    const fail = (e: Error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(e);
-    };
-
-    closeSse = client.connectSSE((ev) => {
-      if (ev.task_id !== taskId) return;
-      if (ev.type === "task_completed") finish("completed");
-      else if (ev.type === "task_failed") finish("failed");
-    });
-
-    pollTimer = setInterval(() => {
-      void (async () => {
-        const t = await client.getTask(taskId, 3000);
-        if (!t.ok) return;
-        if (t.data.status === "completed") finish("completed");
-        else if (t.data.status === "failed") finish("failed");
-      })();
-    }, Math.max(1, pollSec) * 1000);
-
-    deadlineTimer = setTimeout(
-      () => fail(new Error(`Timeout after ${maxSec}s waiting for API task ${taskId}`)),
-      Math.max(1, maxSec) * 1000,
-    );
-
-    if (signal) {
-      if (signal.aborted) {
-        fail(new Error("Aborted"));
-        return;
-      }
-      abortHandler = () => fail(new Error("Aborted"));
-      signal.addEventListener("abort", abortHandler);
-    }
-  });
-}
-
-class GzmoApiClient {
-  readonly baseUrl: string;
-
-  constructor(env: ApiClientEnv = readApiClientEnv()) {
-    this.baseUrl = env.baseUrl;
-  }
-
-  private async fetchJson(pathSuffix: string, init?: RequestInit & { timeoutMs?: number }) {
-    const timeoutMs = init?.timeoutMs ?? 5000;
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), timeoutMs);
-    try {
-      const r = await fetch(`${this.baseUrl}${pathSuffix}`, {
-        ...init,
-        signal: init?.signal ?? ac.signal,
-      });
-      const text = await r.text();
-      let data: any = null;
-      try {
-        data = text.length ? JSON.parse(text) : null;
-      } catch {
-        data = { raw: text };
-      }
-      return { r, data };
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  async health(timeoutMs = 2000): Promise<ApiHealthOk | ApiCallErr> {
-    try {
-      const { r, data } = await this.fetchJson("/api/v1/health", { timeoutMs });
-      if (!r.ok) return { ok: false, status: r.status, error: `HTTP ${r.status}` };
-      return { ok: true, data: data as ApiHealthShape };
-    } catch (e: unknown) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  }
-
-  async submitTask(action: GzmoAction, body: string, chainNext?: string): Promise<ApiSubmitOk | ApiCallErr> {
-    try {
-      const payload: Record<string, unknown> = { action, body };
-      if (chainNext) payload.chain_next = chainNext;
-      const { r, data } = await this.fetchJson("/api/v1/task", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        timeoutMs: 10_000,
-      });
-      if (!r.ok) return { ok: false, status: r.status, error: data?.error ?? `HTTP ${r.status}` };
-      return { ok: true, id: String(data.id), path: data.path, status: String(data.status ?? "pending") };
-    } catch (e: unknown) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  }
-
-  async getTask(id: string, timeoutMs = 5000): Promise<ApiTaskOk | ApiCallErr> {
-    try {
-      const { r, data } = await this.fetchJson(`/api/v1/task/${encodeURIComponent(id)}`, { timeoutMs });
-      if (!r.ok) return { ok: false, status: r.status, error: data?.error ?? `HTTP ${r.status}` };
-      return { ok: true, data: data as ApiTaskShape };
-    } catch (e: unknown) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  }
-
-  /**
-   * Submit a search task to /api/v1/search and return immediately. The server
-   * returns 202 Accepted with `stream_url` and `task_url`; callers then wait
-   * for completion via SSE (preferred) or polling /api/v1/task/:id.
-   */
-  async submitSearch(query: string): Promise<{ ok: true; data: ApiSearchAccepted } | ApiCallErr> {
-    try {
-      const { r, data } = await this.fetchJson("/api/v1/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
-        timeoutMs: 10_000,
-      });
-      if (!r.ok) return { ok: false, status: r.status, error: data?.error ?? `HTTP ${r.status}` };
-      return { ok: true, data: data as ApiSearchAccepted };
-    } catch (e: unknown) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  }
-
-  /**
-   * High-level search: submit (non-blocking) → wait for completion via SSE
-   * (with polling backstop) → fetch and return the answer + evidence packet.
-   * The HTTP server never holds a worker for the full duration, so concurrent
-   * /health and /task submits stay responsive while the search runs.
-   */
-  async search(query: string, maxSec = 120, signal?: AbortSignal): Promise<ApiSearchOk | ApiCallErr> {
-    const sub = await this.submitSearch(query);
-    if (!sub.ok) return sub;
-    const id = sub.data.id;
-
-    let terminal: "completed" | "failed";
-    try {
-      terminal = await waitForApiTaskTerminal(this, id, maxSec, 2, signal);
-    } catch (e: unknown) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-
-    const t = await this.getTask(id, 5000);
-    if (!t.ok) return t;
-    if (terminal === "failed") {
-      return {
-        ok: false,
-        error: t.data.error ?? "Search task failed",
-        status: 500,
-      };
-    }
-
-    const answer = t.data.output ?? t.data.body ?? "";
-    return {
-      ok: true,
-      answer,
-      evidence: t.data.evidence,
-      trace_id: id,
-      task_path: t.data.path ?? sub.data.path,
-    };
-  }
-
-  /**
-   * Subscribe to the daemon SSE stream. Returns a function that closes the
-   * underlying connection. Resilient to disconnects: callers are responsible
-   * for re-subscribing if they want long-lived listening.
-   */
-  connectSSE(onEvent: (ev: ApiEventShape) => void, onClose?: () => void): () => void {
-    const ac = new AbortController();
-    let closed = false;
-
-    const close = () => {
-      if (closed) return;
-      closed = true;
-      try {
-        ac.abort();
-      } catch { /* ignore */ }
-      onClose?.();
-    };
-
-    (async () => {
-      try {
-        const r = await fetch(`${this.baseUrl}/api/v1/stream`, {
-          headers: { Accept: "text/event-stream" },
-          signal: ac.signal,
-        });
-        if (!r.ok || !r.body) {
-          close();
-          return;
-        }
-        const reader = r.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
-        while (!closed) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          let eventEnd: number;
-          while ((eventEnd = buf.indexOf("\n\n")) >= 0) {
-            const block = buf.slice(0, eventEnd);
-            buf = buf.slice(eventEnd + 2);
-            for (const line of block.split("\n")) {
-              if (!line.startsWith("data:")) continue;
-              const payload = line.slice(5).trim();
-              if (!payload) continue;
-              try {
-                onEvent(JSON.parse(payload) as ApiEventShape);
-              } catch { /* malformed event */ }
-            }
-          }
-        }
-      } catch { /* aborted or network error */ }
-      close();
-    })();
-
-    return close;
-  }
-}
-
-/* ── inbox data ── */
-
-type TaskRow = { path: string; status: string | null; updated_at: string; action: string | null };
-
-async function listInbox(filterStatus?: string | null, limit = 20): Promise<TaskRow[]> {
-  const { vaultPath } = await resolveVaultPath();
-  const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
-  const tasks: TaskRow[] = [];
-  if (!(await fileExists(inboxDir))) return [];
-  const entries = await fsp.readdir(inboxDir);
-  for (const e of entries) {
-    if (!e.endsWith(".md")) continue;
-    const p = path.join(inboxDir, e);
-    try {
-      const st = await fsp.stat(p);
-      const md = await fsp.readFile(p, "utf8");
-      const { frontmatter } = parseFrontmatter(md);
-      const status = asNonEmptyString(frontmatter["status"]);
-      const action = asNonEmptyString(frontmatter["action"]);
-      if (filterStatus && status !== filterStatus) continue;
-      tasks.push({ path: p, status, action, updated_at: st.mtime.toISOString() });
-    } catch {
-      // ignore unreadable tasks
-    }
-  }
-  tasks.sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
-  return tasks.slice(0, Math.max(1, Math.min(200, limit)));
-}
-
-/* ── UI helpers ── */
-
-/**
- * Render a 16-cell VRAM usage bar like `VRAM ███████░░░░░░░░░ 18/32GB`.
- * Returns an empty string when either field is missing or zero, so the
- * caller can simply concatenate without conditional spacing.
- */
-function formatVramBar(used?: number, total?: number): string {
-  if (!used || !total || total <= 0) return "";
-  const ratio = Math.min(1, used / total);
-  const filled = Math.round(ratio * 16);
-  const bar = "█".repeat(filled) + "░".repeat(16 - filled);
-  const u = Math.round(used / 1024);
-  const t = Math.round(total / 1024);
-  return `VRAM ${bar} ${u}/${t}GB`;
-}
-
-async function updateUiStatus(ctx: ExtensionContext): Promise<void> {
-  try {
-    const { vaultPath } = await resolveVaultPath();
-    const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
-    let pending = 0;
-    let processing = 0;
-    if (await fileExists(inboxDir)) {
-      const entries = await fsp.readdir(inboxDir);
-      for (const e of entries) {
-        if (!e.endsWith(".md")) continue;
-        const p = path.join(inboxDir, e);
-        try {
-          const s = await readTaskStatus(p);
-          if (s === "pending") pending++;
-          if (s === "processing") processing++;
-        } catch {
-          // ignore unreadable tasks
-        }
-      }
-    }
-    const vaultName = path.basename(vaultPath);
-    const apiHealth = await new GzmoApiClient().health(800);
-    let summary: string;
-    if (apiHealth.ok) {
-      const vram = formatVramBar(apiHealth.data.vram_used_mb, apiHealth.data.vram_total_mb);
-      const badge = `API ${apiHealth.data.status} ● ${apiHealth.data.model_loaded}`;
-      summary = `GZMO: ${pending}p/${processing}a ● ${badge}` + (vram ? ` ● ${vram}` : "");
-    } else {
-      summary = `GZMO: ${pending}p/${processing}a ● API offline`;
-    }
-    ctx.ui.setStatus("gzmo", summary);
-
-    const liveStreamPath = path.join(vaultPath, "GZMO", "Live_Stream.md");
-    let tail: string[] = await fileExists(liveStreamPath)
-      ? tailLineArray(await fsp.readFile(liveStreamPath, "utf8"), 5).map((l) =>
-          l.length > 240 ? `${l.slice(0, 237)}…` : l,
-        )
-      : [];
-
-    if (tail.length === 0) tail = ["(Live_Stream idle or not created yet)"];
-
-    const widgetLines = [summary, `vault: ${vaultName}`, "── live ──", ...tail];
-    ctx.ui.setWidget("gzmo", widgetLines, { placement: "belowEditor" });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    ctx.ui.setStatus("gzmo", `GZMO: env missing (${msg})`);
-    ctx.ui.setWidget("gzmo", [`GZMO: env missing`, msg], { placement: "belowEditor" });
-  }
-}
+/* ── HTTP API client — moved to siblings (./gzmo_api_client, ./gzmo_dashboard, ./gzmo_shared) ── */
 
 async function attachGzmoWatchers(pi: ExtensionAPI, ctx: ExtensionContext, sessionId: string): Promise<void> {
   stopLiveWatch(sessionId);
@@ -842,179 +305,7 @@ async function attachGzmoWatchers(pi: ExtensionAPI, ctx: ExtensionContext, sessi
   await updateUiStatus(ctx);
 }
 
-/* ── dashboard component ── */
-
-type DashboardState = {
-  pending: number;
-  processing: number;
-  vaultName: string;
-  tasks: TaskRow[];
-  liveLines: string[];
-  healthText: string;
-  /** Currently loaded model (e.g. "qwen3:32b") or "(API offline)" when unreachable. */
-  model: string;
-  /** Pre-formatted VRAM bar string, or "" when no VRAM telemetry is available. */
-  vram: string;
-};
-
-class GzmoDashboardComponent {
-  private state: DashboardState;
-  private theme: Theme;
-  private onClose: () => void;
-  private cachedWidth?: number;
-  private cachedLines?: string[];
-
-  constructor(state: DashboardState, theme: Theme, onClose: () => void) {
-    this.state = state;
-    this.theme = theme;
-    this.onClose = onClose;
-  }
-
-  setState(state: DashboardState) {
-    this.state = state;
-    this.invalidate();
-  }
-
-  invalidate(): void {
-    this.cachedWidth = undefined;
-    this.cachedLines = undefined;
-  }
-
-  handleInput(data: string): void {
-    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
-      this.onClose();
-    }
-  }
-
-  render(width: number): string[] {
-    if (this.cachedLines && this.cachedWidth === width) {
-      return this.cachedLines;
-    }
-    const th = this.theme;
-    const lines: string[] = [];
-    this._renderHeader(lines, th, width);
-    this._renderModelVram(lines, th, width);
-    this._renderCounts(lines, th, width);
-    this._renderTasks(lines, th, width);
-    this._renderLive(lines, th, width);
-    this._renderHealth(lines, th, width);
-    this._renderFooter(lines, th, width);
-    this.cachedWidth = width;
-    this.cachedLines = lines;
-    return lines;
-  }
-
-  private _renderHeader(lines: string[], th: Theme, width: number) {
-    const title = th.fg("accent", " GZMO ");
-    const headerLine =
-      th.fg("borderMuted", "─".repeat(3)) + title + th.fg("borderMuted", "─".repeat(Math.max(0, width - 10)));
-    lines.push("");
-    lines.push(truncateToWidth(headerLine, width));
-    lines.push("");
-  }
-
-  private _renderModelVram(lines: string[], th: Theme, width: number) {
-    lines.push(truncateToWidth(
-      `  ${th.fg("muted", "model:")} ${th.fg("text", this.state.model)}  ${th.fg("accent", this.state.vram)}`,
-      width,
-    ));
-    lines.push("");
-  }
-
-  private _renderCounts(lines: string[], th: Theme, width: number) {
-    lines.push(
-      truncateToWidth(
-        `  ${th.fg("muted", "vault:")} ${th.fg("text", this.state.vaultName)}  ${th.fg("warning", `${this.state.pending} pending`)}  ${th.fg("accent", `${this.state.processing} processing`)}`,
-        width,
-      ),
-    );
-    lines.push("");
-  }
-
-  private _renderTasks(lines: string[], th: Theme, width: number) {
-    lines.push(truncateToWidth(`  ${th.fg("muted", "Recent Inbox (newest first)")}`, width));
-    if (this.state.tasks.length === 0) {
-      lines.push(truncateToWidth(`  ${th.fg("dim", "(no tasks)")}`, width));
-    } else {
-      for (const t of this.state.tasks) {
-        const st = t.status ?? "?";
-        const col =
-          st === "completed" ? th.fg("success", st) : st === "failed" ? th.fg("error", st) : th.fg("muted", st);
-        const base = path.basename(t.path);
-        lines.push(truncateToWidth(`  ${col} ${th.fg("dim", String(t.action ?? "?"))}  ${base}`, width));
-      }
-    }
-    lines.push("");
-  }
-
-  private _renderLive(lines: string[], th: Theme, width: number) {
-    lines.push(truncateToWidth(`  ${th.fg("muted", "Live_Stream (tail)")}`, width));
-    for (const ln of this.state.liveLines) {
-      lines.push(truncateToWidth(`  ${th.fg("dim", ln)}`, width));
-    }
-    lines.push("");
-  }
-
-  private _renderHealth(lines: string[], th: Theme, width: number) {
-    lines.push(truncateToWidth(`  ${th.fg("muted", "health.md (tail)")}`, width));
-    for (const ln of this.state.healthText.split("\n").slice(0, 8)) {
-      lines.push(truncateToWidth(`  ${th.fg("text", ln)}`, width));
-    }
-    lines.push("");
-  }
-
-  private _renderFooter(lines: string[], th: Theme, width: number) {
-    lines.push(truncateToWidth(`  ${th.fg("dim", "r = refresh  |  Escape = close")}`, width));
-    lines.push("");
-  }
-}
-
-async function fetchDashboardState(): Promise<DashboardState> {
-  const { vaultPath } = await resolveVaultPath();
-  const vaultName = path.basename(vaultPath);
-  const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
-  let pending = 0;
-  let processing = 0;
-  if (await fileExists(inboxDir)) {
-    for (const e of await fsp.readdir(inboxDir)) {
-      if (!e.endsWith(".md")) continue;
-      const p = path.join(inboxDir, e);
-      try {
-        const s = await readTaskStatus(p);
-        if (s === "pending") pending++;
-        if (s === "processing") processing++;
-      } catch { /* */ }
-    }
-  }
-  const tasks = await listInbox(null, 10);
-  const liveStreamPath = path.join(vaultPath, "GZMO", "Live_Stream.md");
-  const liveLines = await fileExists(liveStreamPath)
-    ? tailLineArray(await fsp.readFile(liveStreamPath, "utf8"), 8).map((l) =>
-        l.length > 120 ? `${l.slice(0, 117)}…` : l,
-      )
-    : ["(no Live_Stream yet)"];
-  const hp = path.join(vaultPath, "GZMO", "health.md");
-  let healthText: string;
-  try {
-    healthText = await tailLines(hp, 12);
-  } catch {
-    healthText = "(health not available)";
-  }
-
-  // Best-effort API probe: dashboard renders even when the daemon is down.
-  const client = new GzmoApiClient();
-  let model = "(API offline)";
-  let vram = "";
-  try {
-    const apiHealth = await client.health(1000);
-    if (apiHealth.ok) {
-      model = apiHealth.data.model_loaded;
-      vram = formatVramBar(apiHealth.data.vram_used_mb, apiHealth.data.vram_total_mb);
-    }
-  } catch { /* ignore — keep "(API offline)" defaults */ }
-
-  return { pending, processing, vaultName, tasks, liveLines, healthText, model, vram };
-}
+/* ── Dashboard component — moved to siblings (./gzmo_api_client, ./gzmo_dashboard, ./gzmo_shared) ── */
 
 /* ── schemas ── */
 
@@ -1770,14 +1061,15 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
       let component: GzmoDashboardComponent | null = null;
 
       await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
-        // Critical: null `dashboardRenderer` on close so SSE callbacks don't
-        // poke a dead TUI handle (Esc, Ctrl+C, or any other dismissal path).
+        // Critical: null the dashboard renderer on close so SSE callbacks
+        // don't poke a dead TUI handle (Esc, Ctrl+C, or any other dismissal
+        // path).
         component = new GzmoDashboardComponent(state, theme, () => {
-          dashboardRenderer = null;
+          setDashboardRenderer(null);
           done();
         });
 
-        dashboardRenderer = {
+        setDashboardRenderer({
           requestRender: () => _tui.requestRender(),
           refresh: async () => {
             try {
@@ -1789,7 +1081,7 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
               /* ignore refresh errors */
             }
           },
-        };
+        });
 
         return {
           render: (width: number) => component!.render(width),

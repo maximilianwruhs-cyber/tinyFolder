@@ -23,6 +23,8 @@ import { readBoolEnv, readIntEnv } from "./pipelines/helpers";
 import { TaskDocument } from "./frontmatter";
 import { atomicWriteFile } from "./atomic_write";
 import { apiEventEmitter } from "./api_events";
+import { LruMap } from "./lru_map";
+import { getVramSnapshot } from "./vram_probe";
 import type {
   ApiEvent,
   ApiHealthResponse,
@@ -40,12 +42,53 @@ const API_HOST = process.env.GZMO_API_HOST?.trim() || "127.0.0.1";
 const API_PORT = readIntEnv("GZMO_API_PORT", 12700, 1024, 65535);
 const API_SOCKET = process.env.GZMO_API_SOCKET?.trim() || "";
 
+// S3: optional shared-secret auth. Always-required when set; required for boot when
+// the API binds to a non-loopback address with LOCAL_ONLY=0 (see startApiServer).
+const API_TOKEN = process.env.GZMO_API_TOKEN?.trim() || "";
+
+// S5: hard caps. Bun does not enforce a max body size by default for arbitrary
+// handlers, so reject oversize payloads before parsing JSON to protect memory.
+const MAX_BODY_BYTES = readIntEnv("GZMO_API_MAX_BODY_BYTES", 1_048_576, 1024, 64 * 1024 * 1024); // 1 MiB default
+const MAX_TASK_BODY_CHARS = readIntEnv("GZMO_API_MAX_TASK_CHARS", 100_000, 256, 10_000_000);
+const MAX_QUERY_CHARS = readIntEnv("GZMO_API_MAX_QUERY_CHARS", 10_000, 16, 1_000_000);
+
+// S4: client-controlled `chain_next` writes to YAML; restrict to a safe filename.
+const CHAIN_NEXT_RE = /^[A-Za-z0-9._-]+\.md$/;
+
+// S1/S2: loopback hostname allowlist for both bind validation and CORS origin parsing.
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  if (LOOPBACK_HOSTS.has(h)) return true;
+  // Strict 127.0.0.0/8 check — accept any "127.x.y.z" but no DNS suffix tricks.
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+}
+
 /**
  * In-memory mirror of recently-submitted tasks. The canonical state lives
  * on disk inside the inbox; this map is just a fast lookup cache for the
  * synchronous /api/v1/task/:id endpoint.
+ *
+ * T4-F: bounded with LRU eviction so a long-running daemon doesn't grow
+ * forever. On miss the lookup falls back to scanning the inbox (canonical
+ * source), so eviction is purely a memory bound, not a correctness change.
+ * Override the cap with `GZMO_API_TASK_REGISTRY_MAX` (default 1000).
  */
-const taskRegistry = new Map<string, ApiTaskResponse>();
+const TASK_REGISTRY_MAX = readIntEnv("GZMO_API_TASK_REGISTRY_MAX", 1000, 16, 1_000_000);
+const taskRegistry = new LruMap<string, ApiTaskResponse>(TASK_REGISTRY_MAX);
+
+/**
+ * T4-G: in-memory `api_id → inbox file path` index. Populated when the API
+ * creates a task (hot path) and lazily by `findInboxFileByApiId` after a cold
+ * boot (so existing files become reachable on first lookup). Bounded the same
+ * way as the task registry to keep memory predictable.
+ *
+ * The disk scan is still the source of truth — entries can become stale if a
+ * file is moved/deleted out-of-band — so on miss we always re-scan and on a
+ * stale-cached path we silently fall back to the slow path.
+ */
+const apiIdIndex = new LruMap<string, string>(TASK_REGISTRY_MAX);
 
 const startedAtMs = Date.now();
 
@@ -67,11 +110,21 @@ function ensureInboxDir(vaultPath: string): string {
 
 function allowOrigin(req: Request): string {
   const origin = req.headers.get("origin") ?? "";
-  if (LOCAL_ONLY) {
-    if (origin.startsWith("http://127.") || origin.startsWith("http://localhost")) return origin;
-    return "http://localhost";
+  if (!LOCAL_ONLY) return origin || "*";
+
+  // S2: parse the Origin URL properly. The previous `startsWith("http://localhost")`
+  // accepted attacker-controlled hosts like `http://localhost.evil.com` and
+  // `http://127.evil.com`. Now we require an exact loopback hostname.
+  if (!origin) return "http://localhost";
+  try {
+    const u = new URL(origin);
+    if ((u.protocol === "http:" || u.protocol === "https:") && isLoopbackHost(u.hostname)) {
+      return origin;
+    }
+  } catch {
+    // malformed Origin header — fall through to safe default
   }
-  return origin || "*";
+  return "http://localhost";
 }
 
 function corsHeaders(req: Request): Record<string, string> {
@@ -79,6 +132,8 @@ function corsHeaders(req: Request): Record<string, string> {
     "Access-Control-Allow-Origin": allowOrigin(req),
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    // S2: ACAO varies per request; tell shared caches not to mix responses across origins.
+    Vary: "Origin",
   };
 }
 
@@ -94,6 +149,48 @@ function jsonResponse<T>(data: T, status: number, req: Request): Response {
 
 function badJson(req: Request): Response {
   return jsonResponse({ error: "Invalid JSON body" }, 400, req);
+}
+
+/**
+ * S3: optional shared-secret check. Returns null when authorised, or a 401
+ * Response when not. /health is intentionally exempt so monitoring still works
+ * without leaking the token, but every mutating route is protected.
+ */
+function requireAuth(req: Request, pathname: string): Response | null {
+  if (!API_TOKEN) return null; // auth disabled
+  if (req.method === "OPTIONS") return null; // CORS preflight
+  if (pathname === "/api/v1/health") return null;
+  const header = req.headers.get("authorization") ?? "";
+  const m = header.match(/^Bearer\s+(.+)$/i);
+  const presented = m?.[1]?.trim() ?? "";
+  if (presented && presented === API_TOKEN) return null;
+  return jsonResponse({ error: "Unauthorized" }, 401, req);
+}
+
+/**
+ * S5: enforce a max body size BEFORE parsing JSON. Rejects payloads with an
+ * oversized `Content-Length`, and also enforces the cap when the header is
+ * absent by reading bytes through an arrayBuffer and checking length.
+ * Returns the decoded body string on success, or a 413 Response on overflow.
+ */
+async function readBoundedBody(req: Request): Promise<{ ok: true; text: string } | { ok: false; res: Response }> {
+  const declared = req.headers.get("content-length");
+  if (declared) {
+    const n = Number.parseInt(declared, 10);
+    if (Number.isFinite(n) && n > MAX_BODY_BYTES) {
+      return { ok: false, res: jsonResponse({ error: `Request body exceeds ${MAX_BODY_BYTES} bytes` }, 413, req) };
+    }
+  }
+  let buf: ArrayBuffer;
+  try {
+    buf = await req.arrayBuffer();
+  } catch {
+    return { ok: false, res: jsonResponse({ error: "Invalid request body" }, 400, req) };
+  }
+  if (buf.byteLength > MAX_BODY_BYTES) {
+    return { ok: false, res: jsonResponse({ error: `Request body exceeds ${MAX_BODY_BYTES} bytes` }, 413, req) };
+  }
+  return { ok: true, text: new TextDecoder().decode(buf) };
 }
 
 function extractResponse(body: string): string {
@@ -120,6 +217,23 @@ function statusOf(doc: TaskDocument): ApiTaskStatus {
 }
 
 async function findInboxFileByApiId(vaultPath: string, id: string): Promise<string | null> {
+  // T4-G: try the in-memory index first. Cache hits avoid the O(n × file) scan.
+  const cachedPath = apiIdIndex.get(id);
+  if (cachedPath) {
+    try {
+      const st = await fsp.lstat(cachedPath);
+      if (!st.isSymbolicLink() && st.isFile()) {
+        // Quick sniff to validate the cached path still hosts our id (handles
+        // file moves / overwrites / deletions out-of-band).
+        const text = await fsp.readFile(cachedPath, "utf8");
+        if (text.includes(`api_id: ${id}`)) return cachedPath;
+      }
+    } catch {
+      // Cached entry stale; fall through to a fresh scan.
+    }
+    apiIdIndex.delete(id);
+  }
+
   const dir = inboxDirFor(vaultPath);
   let entries: string[];
   try {
@@ -132,8 +246,17 @@ async function findInboxFileByApiId(vaultPath: string, id: string): Promise<stri
     if (!f.endsWith(".md")) continue;
     const p = join(dir, f);
     try {
+      // T4-H: never read through a symlink — an attacker could otherwise
+      // exfiltrate arbitrary files by dropping `evil.md -> /etc/passwd` and
+      // querying GET /task/<their-id>.
+      const st = await fsp.lstat(p);
+      if (st.isSymbolicLink()) continue;
       const text = await fsp.readFile(p, "utf8");
-      if (text.includes(needle)) return p;
+      if (text.includes(needle)) {
+        // T4-G: warm the index for future lookups.
+        apiIdIndex.set(id, p);
+        return p;
+      }
     } catch {
       // ignore unreadable files
     }
@@ -173,6 +296,22 @@ async function buildHealthResponse(vaultPath: string): Promise<ApiHealthResponse
   }
 
   const status: ApiHealthResponse["status"] = ollamaConnected ? "healthy" : "degraded";
+
+  // T4-A: prefer the live nvidia-smi probe when it has produced a reading;
+  // fall back to the GZMO_VRAM_USED_MB / GZMO_VRAM_TOTAL_MB env bridge on
+  // hosts without an NVIDIA GPU or when the probe is disabled.
+  const vramSnapshot = getVramSnapshot();
+  const vram_used_mb = vramSnapshot
+    ? vramSnapshot.used_mb
+    : process.env.GZMO_VRAM_USED_MB
+      ? Number.parseInt(process.env.GZMO_VRAM_USED_MB, 10)
+      : undefined;
+  const vram_total_mb = vramSnapshot
+    ? vramSnapshot.total_mb
+    : process.env.GZMO_VRAM_TOTAL_MB
+      ? Number.parseInt(process.env.GZMO_VRAM_TOTAL_MB, 10)
+      : undefined;
+
   return {
     status,
     version: API_VERSION,
@@ -183,13 +322,8 @@ async function buildHealthResponse(vaultPath: string): Promise<ApiHealthResponse
     processing_tasks: processing,
     uptime_seconds: Math.round((Date.now() - startedAtMs) / 1000),
     vault_path: vaultPath,
-    // Bridge: until a live nvidia-smi / Ollama metrics scraper lands, accept
-    // GZMO_VRAM_USED_MB / GZMO_VRAM_TOTAL_MB from .env. `|| undefined` ensures
-    // we publish the fields only when the operator actually set them.
-    // Publish VRAM fields only when the operator explicitly set them.
-    // Explicit 0 is accepted (e.g. fresh boot before Ollama loads).
-    vram_used_mb: process.env.GZMO_VRAM_USED_MB ? Number.parseInt(process.env.GZMO_VRAM_USED_MB, 10) : undefined,
-    vram_total_mb: process.env.GZMO_VRAM_TOTAL_MB ? Number.parseInt(process.env.GZMO_VRAM_TOTAL_MB, 10) : undefined,
+    vram_used_mb,
+    vram_total_mb,
   };
 }
 
@@ -246,9 +380,12 @@ function sseStreamResponse(req: Request): Response {
 }
 
 async function handleTaskSubmit(req: Request): Promise<Response> {
+  // S5: bounded body read before JSON parse.
+  const raw = await readBoundedBody(req);
+  if (!raw.ok) return raw.res;
   let body: ApiTaskRequest;
   try {
-    body = (await req.json()) as ApiTaskRequest;
+    body = JSON.parse(raw.text) as ApiTaskRequest;
   } catch {
     return badJson(req);
   }
@@ -260,8 +397,25 @@ async function handleTaskSubmit(req: Request): Promise<Response> {
   if (typeof body.body !== "string" || body.body.trim() === "") {
     return jsonResponse({ error: "body is required" }, 400, req);
   }
+  if (body.body.length > MAX_TASK_BODY_CHARS) {
+    return jsonResponse({ error: `body exceeds ${MAX_TASK_BODY_CHARS} chars` }, 413, req);
+  }
   if (action === "chain" && !body.chain_next) {
     return jsonResponse({ error: "chain_next is required when action='chain'" }, 400, req);
+  }
+  // S4: prevent YAML frontmatter injection. `chain_next` is interpolated into the
+  // file's YAML; we must reject newlines, colons, and anything that is not a
+  // plain markdown filename.
+  if (body.chain_next !== undefined) {
+    const ct = String(body.chain_next).trim();
+    if (!CHAIN_NEXT_RE.test(ct)) {
+      return jsonResponse(
+        { error: "chain_next must match ^[A-Za-z0-9._-]+\\.md$ (no slashes, no newlines, no YAML metacharacters)" },
+        400,
+        req,
+      );
+    }
+    body.chain_next = ct;
   }
 
   const id = body.id?.trim() || crypto.randomUUID();
@@ -288,6 +442,9 @@ async function handleTaskSubmit(req: Request): Promise<Response> {
     path: filePath,
   };
   taskRegistry.set(id, initial);
+  // T4-G: hot-warm the api_id → path index so the very next GET /task/:id
+  // skips the inbox scan.
+  apiIdIndex.set(id, filePath);
 
   apiEventEmitter.emit({
     type: "task_created",
@@ -345,14 +502,20 @@ async function handleTaskGet(id: string, req: Request): Promise<Response> {
  * /health and concurrent /task submits never queue behind a search.
  */
 async function handleSearch(req: Request): Promise<Response> {
+  // S5: bounded body read before JSON parse.
+  const raw = await readBoundedBody(req);
+  if (!raw.ok) return raw.res;
   let body: ApiSearchRequest;
   try {
-    body = (await req.json()) as ApiSearchRequest;
+    body = JSON.parse(raw.text) as ApiSearchRequest;
   } catch {
     return badJson(req);
   }
   const query = (body?.query ?? "").trim();
   if (!query) return jsonResponse({ error: "query is required" }, 400, req);
+  if (query.length > MAX_QUERY_CHARS) {
+    return jsonResponse({ error: `query exceeds ${MAX_QUERY_CHARS} chars` }, 413, req);
+  }
 
   const id = crypto.randomUUID();
   const vaultPath = resolveVaultPath();
@@ -372,6 +535,8 @@ async function handleSearch(req: Request): Promise<Response> {
     started_at: now,
     path: filePath,
   });
+  // T4-G: hot-warm the api_id → path index for the async search flow too.
+  apiIdIndex.set(id, filePath);
 
   apiEventEmitter.emit({
     type: "task_created",
@@ -401,6 +566,25 @@ export interface StartApiServerOptions {
 export function startApiServer(opts?: StartApiServerOptions): Server<unknown> {
   const useSocket = API_SOCKET.length > 0;
 
+  // S1: when LOCAL_ONLY=1 the operator is asserting "loopback only". If
+  // GZMO_API_HOST has been overridden to anything reachable beyond loopback,
+  // refuse to start instead of silently violating the contract.
+  if (LOCAL_ONLY && !useSocket && !isLoopbackHost(API_HOST)) {
+    throw new Error(
+      `[API] GZMO_LOCAL_ONLY=1 but GZMO_API_HOST=${API_HOST} is not a loopback address. ` +
+        `Set GZMO_API_HOST to 127.0.0.1 / localhost / ::1, use GZMO_API_SOCKET, or unset GZMO_LOCAL_ONLY.`,
+    );
+  }
+
+  // S3: refuse to start a publicly-reachable API without auth. If the operator
+  // has bound to a non-loopback host AND turned LOCAL_ONLY off, require a token.
+  if (!LOCAL_ONLY && !useSocket && !isLoopbackHost(API_HOST) && !API_TOKEN) {
+    throw new Error(
+      `[API] Refusing to start: GZMO_API_HOST=${API_HOST} is non-loopback and GZMO_API_TOKEN is not set. ` +
+        `Set GZMO_API_TOKEN to a strong shared secret, enable GZMO_LOCAL_ONLY=1, or bind to loopback.`,
+    );
+  }
+
   const serveOptions: Parameters<typeof Bun.serve>[0] = useSocket
     ? ({
         unix: API_SOCKET,
@@ -417,6 +601,7 @@ export function startApiServer(opts?: StartApiServerOptions): Server<unknown> {
   const where = useSocket ? `unix:${API_SOCKET}` : `http://${API_HOST}:${API_PORT}`;
   console.log(`[API] Server listening at ${where}`);
   if (LOCAL_ONLY) console.log("[API] LOCAL_ONLY=1 — only loopback origins permitted by CORS.");
+  if (API_TOKEN) console.log("[API] Bearer auth enabled (GZMO_API_TOKEN set).");
   console.log("[API] Routes:");
   console.log("[API]   GET  /api/v1/health");
   console.log("[API]   POST /api/v1/task        (action: think|search|chain)");
@@ -441,6 +626,10 @@ async function routeRequest(req: Request): Promise<Response> {
     return jsonResponse({ error: "Invalid URL" }, 400, req);
   }
   const pathname = url.pathname;
+
+  // S3: token gate (no-op when GZMO_API_TOKEN is unset).
+  const authFail = requireAuth(req, pathname);
+  if (authFail) return authFail;
 
   try {
     if (pathname === "/api/v1/health" && req.method === "GET") {
@@ -482,7 +671,8 @@ async function routeRequest(req: Request): Promise<Response> {
   }
 }
 
-/** Visible for tests — clears the in-memory registry. */
+/** Visible for tests — clears the in-memory registry and api_id index. */
 export function _clearTaskRegistry(): void {
   taskRegistry.clear();
+  apiIdIndex.clear();
 }

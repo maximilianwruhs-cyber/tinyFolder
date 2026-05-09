@@ -1,6 +1,6 @@
 import { join, relative, resolve, basename, extname } from "path";
 import { promises as fsp } from "fs";
-import matter from "gray-matter";
+import matter from "./yaml_frontmatter";
 import { atomicWriteText } from "./vault_fs";
 import { appendWikiLogEntry } from "./wiki_log";
 import { writeSchemaCompliantWikiPage } from "./wiki_contract";

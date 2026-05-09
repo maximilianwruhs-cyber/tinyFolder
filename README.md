@@ -18,6 +18,7 @@ GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `searc
 - [Operational outputs (what the daemon writes)](#operational-outputs-what-the-daemon-writes)
 - [Profiles / safe modes](#profiles--safe-modes)
 - [Proof / smoke / eval commands](#proof--smoke--eval-commands)
+- [Backup & restore](#backup--restore)
 - [Troubleshooting](#troubleshooting)
 - [Fine-tuning (advanced)](#fine-tuning-advanced)
 - [Repo contents (what is public)](#repo-contents-what-is-public)
@@ -304,6 +305,36 @@ Most subsystems can be disabled (all accept `true/false/1/0`):
 - `GZMO_ENABLE_PRUNING`
 - `GZMO_ENABLE_DASHBOARD_PULSE`
 
+### HTTP API (optional)
+
+The daemon exposes a thin REST + SSE layer when enabled. Tasks submitted via HTTP land in the same `GZMO/Inbox/` directory the file watcher reads, so behavior is identical to dropping a `.md` file directly.
+
+- **`GZMO_API_ENABLED`**: `on|off` — start the HTTP server alongside the watcher (default: `off`)
+- **`GZMO_API_HOST`**: hostname to bind (default: `127.0.0.1`)
+- **`GZMO_API_PORT`**: TCP port (default: `12700`)
+- **`GZMO_API_SOCKET`**: path to a Unix domain socket — when set, overrides host/port
+- **`GZMO_LOCAL_ONLY`**: `on|off` — when `on`, refuse to start unless the bind address is loopback, and lock CORS to loopback origins via strict URL parsing (default: `off`)
+- **`GZMO_API_TOKEN`**: shared secret — when set, every route except `/health` requires `Authorization: Bearer <token>`. **Required** when binding to a non-loopback address with `GZMO_LOCAL_ONLY=0`.
+- **`GZMO_API_MAX_BODY_BYTES`**: hard cap on request body bytes (default: `1048576` = 1 MiB)
+- **`GZMO_API_MAX_TASK_CHARS`**: cap on `body` field length for `POST /api/v1/task` (default: `100000`)
+- **`GZMO_API_MAX_QUERY_CHARS`**: cap on `query` field length for `POST /api/v1/search` (default: `10000`)
+- **`GZMO_VRAM_USED_MB`**, **`GZMO_VRAM_TOTAL_MB`**: optional VRAM telemetry surfaced on `/api/v1/health` and the Pi `/gzmo` dashboard
+
+### Operational hardening (optional)
+
+Production knobs added to keep the daemon recoverable and bounded under unexpected load:
+
+- **`GZMO_TASK_CONCURRENCY`**: integer 1..8 — max inbox tasks running in parallel (default: `1` — single-user GPUs almost always want one model at a time)
+- **`GZMO_RECOVERY_GRACE_MS`**: milliseconds — boot recovery skips `processing` tasks newer than this (default: `30000`); guards against race with a still-live instance
+- **`GZMO_RECOVERY_FAIL_ON_RESTART`**: `on|off` — boot recovery marks stale tasks `failed` instead of resetting to `pending` (default: `off`)
+- **`GZMO_INFER_REASON_TIMEOUT_MS`**: hard upper bound for `reason`-role LLM calls (default: `120000`)
+- **`GZMO_INFER_FAST_TIMEOUT_MS`**: hard upper bound for `fast`/`judge`/`rerank`/query-rewrite LLM calls (default: `30000`)
+- **`GZMO_EMBED_TIMEOUT_MS`**: hard upper bound on embedding HTTP calls (default: `30000`)
+- **`GZMO_SHUTDOWN_DRAIN_MS`**: max ms to wait for in-flight tasks + embedding queue on `SIGINT`/`SIGTERM` before forcing exit (default: `10000`)
+- **`GZMO_LOG_ROTATE_MB`**: rotate `safeAppendJsonl` files (`perf.jsonl`, `Reasoning_Traces/index.jsonl`, etc.) when they exceed N MB; `0` disables (default: `50`)
+- **`GZMO_LOG_KEEP`**: number of rotated generations to retain (default: `3`, capped at `20`)
+- **`GZMO_TRACE_RETAIN_DAYS`**: prune `Reasoning_Traces/*.json` older than N days at boot; unset/`0` disables (default: disabled — traces are valuable for debugging)
+
 ### Reasoning engine (optional)
 
 Structured traces, filesystem tools, Tree-of-Thought search, and cross-task claims are **off by default** except traces.
@@ -322,7 +353,8 @@ Structured traces, filesystem tools, Tree-of-Thought search, and cross-task clai
 - **`GZMO_ENABLE_GATES`**: `on|off` — analyze / retrieve / reason gates in the ToT pipeline (default: `off`)
 - **`GZMO_ENABLE_CRITIQUE`**: `on|off` — on total ToT failure, run a critique pass and optionally one replan wave (default: `off`)
 - **`GZMO_ENABLE_MODEL_ROUTING`**: `on|off` — route ToT LLM calls by role (`fast` / `reason` / `judge`) (default: `off`)
-- **`GZMO_FAST_MODEL`**, **`GZMO_REASON_MODEL`**, **`GZMO_JUDGE_MODEL`**: Ollama model tags when routing is on (reason/judge fall back to `OLLAMA_MODEL` when unset)
+- **`GZMO_FAST_MODEL`**, **`GZMO_REASON_MODEL`**, **`GZMO_JUDGE_MODEL`**, **`GZMO_RERANK_MODEL`**: Ollama model tags when routing is on (each falls back to `OLLAMA_MODEL` when unset)
+- **`GZMO_EMBED_MODEL`**: embedding model tag (default: `nomic-embed-text`)
 - **`GZMO_ENABLE_TOOL_CHAINING`**: `on|off` — allow follow-up `vault_read` / `dir_list` calls inferred from prior tool output, still capped by `GZMO_MAX_TOOL_CALLS` (default: `off`)
 - **`GZMO_ENABLE_KNOWLEDGE_GRAPH`**: `on|off` — update the on-vault Knowledge Graph on task completion (default: `off`)
 - **`GZMO_KG_SEARCH_AUGMENT`**: `on|off` — augment vault retrieval using Knowledge Graph-connected sources (default: `off`)
@@ -539,6 +571,34 @@ bun run eval:quality
 # local vault proof runner (reads your VAULT_PATH)
 bun run proof:local-vault
 ```
+
+---
+
+## Backup & restore
+
+Everything stateful lives under `$VAULT_PATH`. There is no external database — backing up the vault directory backs up the entire daemon's working state. The Ollama model cache (`~/.ollama/models`) is large but reproducible (`ollama pull` re-downloads), so it does not need to be backed up.
+
+What's inside `$VAULT_PATH` that matters:
+
+- `GZMO/Inbox/` — pending and historical task `.md` files
+- `GZMO/Thought_Cabinet/` — generated notes, crystallizations
+- `GZMO/Reasoning_Traces/` — JSON traces (subject to optional retention via `GZMO_TRACE_RETAIN_DAYS`)
+- `GZMO/embeddings.json`, `GZMO/memory.json`, `GZMO/CHAOS_STATE.json` — runtime state snapshots
+- `GZMO/perf.jsonl`, `GZMO/strategy_ledger.jsonl`, `GZMO/Reasoning_Traces/index.jsonl` — append-only logs (subject to size rotation via `GZMO_LOG_ROTATE_MB`; rotated files end in `.1`, `.2`, ...)
+- `GZMO/Quarantine/` — anything the safety pipeline flagged
+- `wiki/` — generated knowledge base
+
+Recommended rhythm before any upgrade or risky `.env` change:
+
+```bash
+# Snapshot in place — preserves permissions, links, and timestamps.
+cp -a "$VAULT_PATH" "${VAULT_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
+
+# Or if you want a tarball off-host:
+tar -caf "/tmp/gzmo-vault-$(date +%Y%m%d-%H%M%S).tar.zst" -C "$(dirname "$VAULT_PATH")" "$(basename "$VAULT_PATH")"
+```
+
+To restore: stop the daemon (`systemctl --user stop gzmo-daemon` or Ctrl+C), `rm -rf $VAULT_PATH`, restore the snapshot, and start the daemon again. Boot recovery (`R1`) will sweep any tasks left in `processing` from the snapshot and reset them to `pending` so the watcher re-dispatches them.
 
 ---
 

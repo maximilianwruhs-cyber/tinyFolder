@@ -44,6 +44,11 @@ export class VaultWatcher extends EventEmitter {
       persistent: true,
       ignoreInitial: false, // Scan existing files on startup
       depth: 0,             // Only watch top-level Inbox, not subdirs
+      // T4-H: defense-in-depth. Don't follow symlinks — an attacker (or a
+      // confused user) shouldn't be able to drop `evil.md -> /etc/passwd` in
+      // the inbox and have the daemon treat it as a task. The TaskDocument
+      // loader also lstat-rejects to cover non-watcher paths (HTTP API).
+      followSymlinks: false,
       awaitWriteFinish: {
         stabilityThreshold: 300,
         pollInterval: 100,

@@ -1,4 +1,4 @@
-import matter from "gray-matter";
+import matter from "./yaml_frontmatter";
 import { basename, dirname, extname, relative, resolve } from "path";
 import { existsSync } from "fs";
 import { safeWriteText } from "./vault_fs";

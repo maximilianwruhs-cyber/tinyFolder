@@ -11,7 +11,7 @@
  
 import { dirname, relative, resolve, sep } from "path";
 import { mkdirSync, renameSync, writeFileSync } from "fs";
-import { mkdir, rename } from "fs/promises";
+import { mkdir, rename, stat, unlink } from "fs/promises";
 import { appendFile } from "fs/promises";
  
 export class VaultPathError extends Error {
@@ -111,11 +111,65 @@ export function atomicWriteJsonSync(vaultRoot: string, targetPath: string, value
 /**
  * Append a single JSONL line safely (vault-contained + raw-protected).
  * Creates the parent directory if it doesn't exist.
+ *
+ * R5 (rotation):
+ *   When the file exceeds GZMO_LOG_ROTATE_MB (default 50 MB), it is rotated:
+ *     foo.jsonl  -> foo.jsonl.1
+ *     foo.jsonl.1 -> foo.jsonl.2
+ *     ... up to GZMO_LOG_KEEP (default 3); older rolls are deleted.
+ *   Set GZMO_LOG_ROTATE_MB=0 to disable rotation entirely.
  */
 export async function safeAppendJsonl(vaultRoot: string, targetPath: string, value: unknown): Promise<void> {
   const { abs } = resolveVaultPath(vaultRoot, targetPath);
   await ensureParentDir(abs);
+  await maybeRotate(abs);
   const line = JSON.stringify(value) + "\n";
   await appendFile(abs, line, "utf-8");
+}
+
+/** Read rotation thresholds from env each call so tests can tweak them mid-run. */
+function rotateThresholdBytes(): number {
+  const raw = process.env.GZMO_LOG_ROTATE_MB;
+  const mb = raw === undefined ? 50 : Number.parseInt(raw, 10);
+  if (!Number.isFinite(mb) || mb <= 0) return 0; // 0/invalid disables rotation
+  return mb * 1024 * 1024;
+}
+function rotateKeep(): number {
+  const raw = process.env.GZMO_LOG_KEEP;
+  const k = raw === undefined ? 3 : Number.parseInt(raw, 10);
+  return Number.isFinite(k) && k >= 1 ? Math.min(k, 20) : 3;
+}
+
+async function maybeRotate(abs: string): Promise<void> {
+  const limit = rotateThresholdBytes();
+  if (limit === 0) return;
+  let size: number;
+  try {
+    const st = await stat(abs);
+    size = st.size;
+  } catch {
+    return; // file doesn't exist yet — nothing to rotate
+  }
+  if (size < limit) return;
+
+  const keep = rotateKeep();
+  // Drop the oldest roll if it would exceed the keep budget.
+  const oldest = `${abs}.${keep}`;
+  try { await unlink(oldest); } catch { /* nothing to drop */ }
+
+  // Shift .N -> .N+1 from oldest to newest so we never overwrite live data.
+  for (let i = keep - 1; i >= 1; i--) {
+    try {
+      await rename(`${abs}.${i}`, `${abs}.${i + 1}`);
+    } catch {
+      // gap in the chain is fine
+    }
+  }
+  // Move current → .1 so the next append starts a fresh file.
+  try {
+    await rename(abs, `${abs}.1`);
+  } catch {
+    // If rename failed (race), leave the file alone — appending is still safe.
+  }
 }
  

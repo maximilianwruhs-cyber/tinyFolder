@@ -12,9 +12,10 @@ import { existsSync } from "fs";
 import { promises as fsp } from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import matter from "gray-matter";
+import matter from "./yaml_frontmatter";
 import { cpus } from "os";
 import { atomicWriteJson, resolveVaultPath } from "./vault_fs";
+import { DEFAULT_TIMEOUTS, makeAbortSignal } from "./lifecycle";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -73,11 +74,27 @@ async function embedText(
   text: string,
   ollamaUrl: string = "http://localhost:11434",
 ): Promise<number[]> {
-  const resp = await fetch(`${ollamaUrl}/api/embeddings`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: EMBED_MODEL, prompt: text }),
-  });
+  // R2: every embedding fetch must be cancellable. A wedged Ollama (e.g. a
+  // model still loading) can otherwise block the entire embed queue forever.
+  const signal = makeAbortSignal({ timeoutMs: DEFAULT_TIMEOUTS.embed() });
+  let resp: Response;
+  try {
+    resp = await fetch(`${ollamaUrl}/api/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: EMBED_MODEL, prompt: text }),
+      signal,
+    });
+  } catch (err: any) {
+    const name = err?.name ?? "";
+    if (name === "AbortError" || name === "TimeoutError") {
+      const wrapped = new Error(`Embedding fetch aborted: ${err?.message ?? name}`);
+      // Mark as a transient backoff-worthy error so the queue's retry path triggers.
+      (wrapped as any).status = 503;
+      throw wrapped;
+    }
+    throw err;
+  }
 
   if (!resp.ok) {
     const err = new Error(`Embedding failed: ${resp.status} ${resp.statusText}`);

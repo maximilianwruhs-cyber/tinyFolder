@@ -1,5 +1,5 @@
 import { join, basename, extname } from "path";
-import matter from "gray-matter";
+import matter from "./yaml_frontmatter";
 import { writeSchemaCompliantWikiPage } from "./wiki_contract";
 
 function ensureTrailingNewline(s: string): string {

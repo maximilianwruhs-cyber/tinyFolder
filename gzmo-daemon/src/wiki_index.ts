@@ -1,6 +1,6 @@
 import { promises as fsp } from "fs";
 import { join, relative, resolve, basename, extname } from "path";
-import matter from "gray-matter";
+import matter from "./yaml_frontmatter";
 import { atomicWriteText } from "./vault_fs";
 
 type IndexSection =

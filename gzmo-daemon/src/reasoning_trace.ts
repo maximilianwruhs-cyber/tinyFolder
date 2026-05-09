@@ -3,7 +3,7 @@
  */
 
 import { join } from "path";
-import { readdir } from "fs/promises";
+import { readdir, stat, unlink } from "fs/promises";
 import { atomicWriteJson, safeAppendJsonl } from "./vault_fs";
 
 export type ReasoningNodeType =
@@ -84,6 +84,43 @@ export async function appendTraceIndex(vaultPath: string, trace: ReasoningTrace)
     timestamp: new Date().toISOString(),
   };
   await safeAppendJsonl(vaultPath, indexPath, entry);
+}
+
+/**
+ * R5: prune trace JSON files older than `retainDays`. Opt-in: set
+ * `GZMO_TRACE_RETAIN_DAYS=N` (or pass an explicit value) to enable.
+ * Returns the list of deleted absolute paths so callers can log it.
+ */
+export async function sweepOldTraces(
+  vaultPath: string,
+  retainDays?: number,
+  now: () => number = Date.now,
+): Promise<string[]> {
+  const days = retainDays ?? Number.parseInt(process.env.GZMO_TRACE_RETAIN_DAYS ?? "0", 10);
+  if (!Number.isFinite(days) || days <= 0) return []; // disabled by default
+  const cutoff = now() - days * 24 * 60 * 60 * 1000;
+  const dir = join(vaultPath, TRACES_SUBDIR);
+
+  let files: string[];
+  try {
+    files = await readdir(dir);
+  } catch {
+    return [];
+  }
+
+  const deleted: string[] = [];
+  for (const f of files) {
+    if (!f.endsWith(".json")) continue; // never touch index.jsonl or rotated logs
+    const fp = join(dir, f);
+    try {
+      const st = await stat(fp);
+      if (st.mtimeMs < cutoff) {
+        await unlink(fp);
+        deleted.push(fp);
+      }
+    } catch { /* ignore */ }
+  }
+  return deleted;
 }
 
 export async function findTracesForTask(vaultPath: string, taskFile: string): Promise<ReasoningTrace[]> {

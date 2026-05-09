@@ -11,7 +11,7 @@
 
 import { promises as fsp } from "fs";
 import * as path from "path";
-import matter from "gray-matter";
+import matter from "./yaml_frontmatter";
 import type { ChaosSnapshot } from "./types";
 import type { EmbeddingStore } from "./embeddings";
 import { searchVault, formatSearchContext, type SearchResult } from "./search";
