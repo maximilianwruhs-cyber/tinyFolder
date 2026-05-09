@@ -84,7 +84,7 @@ if [[ -f "$ENV_FILE" ]]; then
     ok=0
     actions+=("Create the vault directory or fix VAULT_PATH in $ENV_FILE")
   else
-    for sub in GZMO/Inbox GZMO/Subtasks GZMO/Thought_Cabinet GZMO/Quarantine GZMO/Reasoning_Traces wiki; do
+    for sub in GZMO/Inbox GZMO/Dropzone GZMO/Subtasks GZMO/Thought_Cabinet GZMO/Quarantine GZMO/Reasoning_Traces wiki wiki/incoming; do
       d="$vault_path/$sub"
       if [[ ! -d "$d" ]]; then
         mkdir -p "$d"

@@ -67,6 +67,9 @@ for (const dir of [
   INBOX_PATH,
   join(VAULT_PATH, "GZMO", "Subtasks"),
   join(VAULT_PATH, "GZMO", "Thought_Cabinet"),
+  join(VAULT_PATH, "GZMO", "Dropzone"),
+  join(VAULT_PATH, "GZMO", "Dropzone", "_tmp"),
+  join(VAULT_PATH, "wiki", "incoming"),
 ]) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
@@ -236,6 +239,7 @@ let apiServer: Server<unknown> | undefined;
 
 // R4: track auxiliary watchers / closeables so shutdown can drain them.
 let embedWatcher: import("chokidar").FSWatcher | undefined;
+let dropzoneWatcher: import("chokidar").FSWatcher | undefined;
 
 let activeTaskCount = 0;
 let lastTaskCompletedAt = 0;
@@ -379,6 +383,26 @@ async function inboxHasPending(): Promise<boolean> {
     }
 
     watcher.start();
+
+    if (readBoolEnv("GZMO_ENABLE_DROPZONE", true)) {
+      try {
+        const { startDropzoneWatcher, scanDropzoneOnBoot } = await import("./src/dropzone_watcher");
+        const dropDeps = {
+          vaultPath: VAULT_PATH,
+          inboxPath: INBOX_PATH,
+          embeddings: embeddings.getStore()
+            ? { enqueueUpsertFile: (p: string) => embeddings.enqueueUpsertFile(p), whenIdle: () => embeddings.whenIdle() }
+            : undefined,
+          log: (m: string) => stream.log(m),
+        };
+        await scanDropzoneOnBoot(dropDeps);
+        dropzoneWatcher = startDropzoneWatcher(dropDeps);
+      } catch (err: any) {
+        console.warn(`[DROPZONE] Failed to start (non-fatal): ${err?.message ?? err}`);
+      }
+    } else {
+      console.log("[DROPZONE] Disabled (GZMO_ENABLE_DROPZONE=0).");
+    }
   } else {
     console.log("[WATCHER] Inbox watcher disabled by profile.");
   }
@@ -680,6 +704,10 @@ async function shutdown(signal: string) {
   if (embedWatcher) {
     try { await embedWatcher.close(); } catch (err: any) { console.warn(`[EMBED] Stop error: ${err?.message ?? err}`); }
     embedWatcher = undefined;
+  }
+  if (dropzoneWatcher) {
+    try { await dropzoneWatcher.close(); } catch (err: any) { console.warn(`[DROPZONE] Stop error: ${err?.message ?? err}`); }
+    dropzoneWatcher = undefined;
   }
 
   // 2. Stop the HTTP API so no new tasks/searches arrive via the API path.

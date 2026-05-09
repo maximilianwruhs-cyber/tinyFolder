@@ -125,11 +125,13 @@ esac
 echo "[5/9] Scaffolding vault at $VAULT ..."
 mkdir -p \
   "$VAULT/GZMO/Inbox" \
+  "$VAULT/GZMO/Dropzone" \
   "$VAULT/GZMO/Subtasks" \
   "$VAULT/GZMO/Thought_Cabinet" \
   "$VAULT/GZMO/Quarantine" \
   "$VAULT/GZMO/Reasoning_Traces" \
-  "$VAULT/wiki"
+  "$VAULT/wiki" \
+  "$VAULT/wiki/incoming"
 
 # 6. .env
 echo "[6/9] Writing $REPO_ROOT/gzmo-daemon/.env ..."

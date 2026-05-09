@@ -70,11 +70,13 @@ echo "agentic-setup: vault=$vault_path" >&2
 
 echo "agentic-setup: creating vault scaffold…" >&2
 mkdir -p "$vault_path/GZMO/Inbox"
+mkdir -p "$vault_path/GZMO/Dropzone"
 mkdir -p "$vault_path/GZMO/Subtasks"
 mkdir -p "$vault_path/GZMO/Thought_Cabinet"
 mkdir -p "$vault_path/GZMO/Quarantine"
 mkdir -p "$vault_path/GZMO/Reasoning_Traces"
 mkdir -p "$vault_path/wiki"
+mkdir -p "$vault_path/wiki/incoming"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "agentic-setup: writing $ENV_FILE" >&2

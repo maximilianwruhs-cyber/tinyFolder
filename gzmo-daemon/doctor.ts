@@ -172,6 +172,64 @@ async function runDiagnostics(flags: ReturnType<typeof parseDoctorFlags>, env: D
     }),
   );
 
+  steps.push(
+    await runStep(stepCtx, {
+      id: "dropzone.policy",
+      title: "Dropzone conversion / dedup / ZIP (env snapshot)",
+      run: async () => {
+        const { getDropzoneConvertConfig } = await import("./src/dropzone_convert");
+        const { getDropzoneDedupConfig, DROPZONE_INDEX_REL } = await import("./src/dropzone_dedup");
+        const { getDropzoneZipConfig } = await import("./src/dropzone_zip");
+        const c = getDropzoneConvertConfig();
+        const d = getDropzoneDedupConfig();
+        const z = getDropzoneZipConfig();
+        const exts = [...c.extensions].sort().join(", ");
+        const details = [
+          `convert: ${c.enabled ? "on" : "off"}  max_bytes=${c.maxBytes}  timeout_ms=${c.timeoutMs}`,
+          `extensions: ${exts}`,
+          `dedup: ${d.enabled ? "on" : "off"}  max_bytes=${d.maxBytes}  index: ${DROPZONE_INDEX_REL}`,
+          `zip ingest: ${z.enabled ? "on" : "off"}  max_zip_bytes=${z.maxZipBytes}  max_entry_bytes=${z.maxEntryUncompressedBytes}  max_entries_scanned=${z.maxEntriesScanned}  max_ratio=${z.maxCompressionRatio}`,
+        ].join("\n");
+
+        const dropRoot = join(env.vaultPath, "GZMO", "Dropzone");
+        const layoutChecks: Array<{ label: string; path: string }> = [
+          { label: "GZMO/Dropzone/", path: dropRoot },
+          { label: "GZMO/Dropzone/files/", path: join(dropRoot, "files") },
+          { label: "GZMO/Dropzone/_tmp/", path: join(dropRoot, "_tmp") },
+          { label: "wiki/incoming/", path: join(env.vaultPath, "wiki", "incoming") },
+          { label: "GZMO/ (index parent)", path: join(env.vaultPath, "GZMO") },
+        ];
+        const missing = layoutChecks.filter((x) => !ensureDirExists(x.path));
+        const warnBlock =
+          missing.length > 0
+            ? `\n\nMissing paths (daemon mkdirs these on first drop, but creating them now avoids surprises):\n${missing.map((m) => `- ${m.label} ${m.path}`).join("\n")}`
+            : "";
+
+        return {
+          status: missing.length === 0 ? "PASS" : "WARN",
+          summary:
+            missing.length === 0
+              ? "Dropzone policy readable from env (see README)"
+              : "Dropzone policy OK — some Dropzone/wiki paths are missing",
+          details: details + warnBlock,
+          fix:
+            missing.length > 0
+              ? [
+                  {
+                    id: "dropzone.layout.mkdir",
+                    title: "Create Dropzone + wiki/incoming layout",
+                    severity: "warn",
+                    commands: [
+                      `mkdir -p "${join(dropRoot, "files")}" "${join(dropRoot, "_tmp")}" "${join(dropRoot, "_processed")}" "${join(dropRoot, "_failed")}" "${join(env.vaultPath, "wiki", "incoming")}"`,
+                    ],
+                  },
+                ]
+              : undefined,
+        };
+      },
+    }),
+  );
+
   // 2) Ollama discovery (readonly)
   const requiredModels = [flags.profile === "deep" ? "hermes3:8b" : (process.env.OLLAMA_MODEL ?? "hermes3:8b"), "nomic-embed-text"];
   const ollama = await runStep(stepCtx, {

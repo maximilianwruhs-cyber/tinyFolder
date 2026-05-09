@@ -253,6 +253,7 @@ This repo does **not** ship your vault content. You provide a vault directory an
 Minimum required directories:
 
 - `GZMO/Inbox/` (task inbox)
+- `GZMO/Dropzone/` (optional: arbitrary files the daemon routes into Inbox or `wiki/incoming/`)
 - `GZMO/Subtasks/` (chain sub-tasks)
 - `GZMO/Thought_Cabinet/` (dream/self-ask/etc artifacts)
 - `GZMO/Quarantine/` (optional, but used by some flows)
@@ -261,11 +262,13 @@ Create them:
 
 ```bash
 mkdir -p "/absolute/path/to/your/vault/GZMO/Inbox"
+mkdir -p "/absolute/path/to/your/vault/GZMO/Dropzone"
 mkdir -p "/absolute/path/to/your/vault/GZMO/Subtasks"
 mkdir -p "/absolute/path/to/your/vault/GZMO/Thought_Cabinet"
 mkdir -p "/absolute/path/to/your/vault/GZMO/Quarantine"
 mkdir -p "/absolute/path/to/your/vault/GZMO/Reasoning_Traces"
 mkdir -p "/absolute/path/to/your/vault/wiki"
+mkdir -p "/absolute/path/to/your/vault/wiki/incoming"
 ```
 
 Note: the daemon also creates some directories on boot if missing, but **do not rely on that** when automating setup—create the scaffold explicitly. `GZMO/Reasoning_Traces/` is optional (used when `GZMO_ENABLE_TRACES` is on).
@@ -337,6 +340,27 @@ Most subsystems can be disabled (all accept `true/false/1/0`):
 - `GZMO_ENABLE_WIKI_LINT`
 - `GZMO_ENABLE_PRUNING`
 - `GZMO_ENABLE_DASHBOARD_PULSE`
+- `GZMO_ENABLE_DROPZONE` — watch `GZMO/Dropzone/` for loose files (default: `on` when the inbox watcher runs)
+
+**Dropzone conversion** (local-only; no network in the convert path):
+
+- `GZMO_DROPZONE_CONVERT` — `on|off` — try built-in Markdown conversion for allowed non-`.md` types before writing a binary stub (default: `on`)
+- `GZMO_DROPZONE_CONVERT_MAX_BYTES` — max file size to attempt conversion (default: `52428800` = 50 MiB; clamped 4096 … 200 MiB)
+- `GZMO_DROPZONE_CONVERT_TIMEOUT_MS` — per-file wall clock for conversion (default: `120000`; clamped 5000 … 600000)
+- `GZMO_DROPZONE_CONVERT_EXTENSIONS` — comma-separated allowlist without dots (default: `pdf,docx,html,htm,txt,text,csv,json`). Empty/unset uses the default set.
+
+**Dropzone dedup (SHA256)** — skips re-converting identical drops; writes `type: dropzone-duplicate-ref` instead:
+
+- `GZMO_DROPZONE_DEDUP` — `on|off` (default: `on`)
+- `GZMO_DROPZONE_DEDUP_MAX_BYTES` — only hash files up to this size for dedup (default: same clamp window as `GZMO_DROPZONE_CONVERT_MAX_BYTES`)
+
+**Dropzone ZIP** — **off** by default; scans a dropped `.zip` on disk and ingests the **first** inner file whose extension is in `GZMO_DROPZONE_CONVERT_EXTENSIONS` (Zip Slip–safe, bounded):
+
+- `GZMO_DROPZONE_ZIP` — `on|off` (default: `off`)
+- `GZMO_DROPZONE_ZIP_MAX_BYTES` — max outer archive size (default: `104857600` = 100 MiB)
+- `GZMO_DROPZONE_ZIP_MAX_ENTRIES` — max central-directory entries scanned (default: `512`)
+- `GZMO_DROPZONE_ZIP_MAX_ENTRY_BYTES` — max uncompressed size per inner file (default: `52428800`)
+- `GZMO_DROPZONE_ZIP_MAX_RATIO` — max `uncompressedSize / compressedSize` per entry (default: `100`)
 
 ### HTTP API (optional)
 
@@ -461,6 +485,19 @@ systemctl --user restart gzmo-daemon
 
 ## Submit tasks (Inbox contract)
 
+### Dropzone (loose files)
+
+When the daemon runs with the inbox watcher enabled (so not in `heartbeat` / `GZMO_ENABLE_INBOX_WATCHER=0`) and `GZMO_ENABLE_DROPZONE` is not turned off, it watches **`$VAULT_PATH/GZMO/Dropzone/`** (top-level entries only):
+
+- A **pending GZMO task** `.md` (`status: pending` and `action: think|search|chain`) is **moved into** `GZMO/Inbox/`.
+- Any other **Markdown** file is copied into **`wiki/incoming/`**, embedded when the store is available, then an **`action: search` follow-up task** is created so retrieval can cite the new page.
+- **Non-Markdown** files: if `GZMO_DROPZONE_CONVERT` is on and the extension is in `GZMO_DROPZONE_CONVERT_EXTENSIONS` (and the file is under the size cap), the daemon converts to Markdown, writes **`wiki/incoming/`** with frontmatter (`type: dropzone-converted`, `binary_path`, `converted_handler`, optional `dropzone_pdf_triage` for PDFs, optional `dropzone_zip_member` when the source was a `.zip`), keeps the original bytes under **`GZMO/Dropzone/files/`**, embeds when configured, then writes the follow-up search task. If conversion is off, unsupported, oversize, or errors, it stores the file under `GZMO/Dropzone/files/` and writes a **stub** page instead (same as before).
+- **SHA256 dedup:** when `GZMO_DROPZONE_DEDUP` is on and the file is within `GZMO_DROPZONE_DEDUP_MAX_BYTES`, a vault-local index at **`GZMO/.gzmo_dropzone_index.json`** records the first ingest outcome per hash (converted Markdown page **or** binary stub page—anything that reached `wiki/incoming/` plus a stored file under `GZMO/Dropzone/files/`). A repeat drop gets `type: dropzone-duplicate-ref` pointing at the earlier wiki page and stored binary.
+- **ZIP:** when `GZMO_DROPZONE_ZIP=on`, a dropped `.zip` is opened with bounded scanning; the first inner file matching the conversion allowlist is converted. Outer `.zip` bytes are still stored under `GZMO/Dropzone/files/`.
+- **Higher PDF fidelity (optional, not bundled):** the built-in path is text-layer extraction only. For difficult PDFs you can manually run a local tool (e.g. **Docling** or **Marker**) on files under `GZMO/Dropzone/files/` and move the resulting Markdown into `wiki/incoming/` yourself, or extend the daemon later with an explicit opt-in sidecar—there is no automatic cloud conversion in GZMO.
+
+Processed originals are moved to `GZMO/Dropzone/_processed/`; failures go to `GZMO/Dropzone/_failed/` when possible. Reserved under Dropzone: `_processed/`, `_failed/`, `files/`, `_tmp/` (ignored by the watcher). Set `GZMO_ENABLE_DROPZONE=0` to disable.
+
 ### Golden minimal task (end-to-end verification)
 
 This is the smallest task that verifies the entire pipeline:
@@ -564,6 +601,7 @@ High-signal files (examples; depends on enabled subsystems):
 - `GZMO/anchor-index.json` + `GZMO/anchor-report.md` — anchor artifacts
 - `GZMO/self-ask-quality.md` — self-ask quality report
 - `GZMO/Reasoning_Traces/` — per-task reasoning traces (`*.json`), optional `index.jsonl` and `claims.jsonl`
+- `GZMO/.gzmo_dropzone_index.json` — optional SHA256 → first-ingest map for Dropzone dedup (when `GZMO_DROPZONE_DEDUP` is on)
 
 Important operational invariant:
 - **Vault `docs/**` is excluded from default retrieval** unless explicitly referenced (keeps “human docs” from polluting RAG by default).

@@ -439,6 +439,7 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
       "Use gzmo_submit_task when the user wants to create a GZMO task (think, search, or chain).",
       "Always include the full task body as Markdown.",
       "For chain actions, also provide chain_next pointing to a filename in GZMO/Subtasks/.",
+      "For ad-hoc files without hand-authored frontmatter, the user can drop them under VAULT_PATH/GZMO/Dropzone/ instead (daemon ingests + queues follow-up search). Supported conversions (when enabled) include pdf, docx, html, txt, csv, json; optional ZIP unpack (GZMO_DROPZONE_ZIP) picks the first matching inner file; dedup uses GZMO/.gzmo_dropzone_index.json.",
     ],
     parameters: SubmitParams,
     async execute(
@@ -609,6 +610,7 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
       "Use gzmo_query_context when the user asks about vault content, project knowledge, or anything requiring RAG search.",
       "This creates a search task, waits for daemon completion, and returns the Evidence Packet or GZMO Response.",
       "Do not use for general web search — this is vault-local RAG only.",
+      "If the user dropped files into `GZMO/Dropzone/`, wait briefly for the daemon to finish ingest (see `wiki/incoming/` for `type: incoming-note|dropzone-converted|dropzone-binary-stub|dropzone-duplicate-ref`, or `__dropzone_followup__*.md` tasks). Converted pages include `converted_handler`, optional `dropzone_pdf_triage` (PDF heuristic: likely_scan_or_empty | mixed_text_starts_late | text_layer_ok), and when ingested from a `.zip`, `dropzone_zip_member` / `dropzone_zip_outer_name`. Duplicates link `dropzone_duplicate_of_wiki`. Tune via `GZMO_DROPZONE_CONVERT*`, `GZMO_DROPZONE_DEDUP*`, `GZMO_DROPZONE_ZIP*`.",
     ],
     parameters: QueryContextParams,
     async execute(
