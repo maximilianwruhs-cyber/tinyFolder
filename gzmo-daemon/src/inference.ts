@@ -38,7 +38,9 @@ export interface InferDetailedOptions {
   mindDeep?: boolean;
 }
 
-export async function inferDetailed(
+/** Internal: streaming inference with any pre-built model. */
+async function _inferStreamCore(
+  model: ReturnType<typeof ollama>,
   system: string,
   prompt: string,
   opts?: InferDetailedOptions,
@@ -63,7 +65,7 @@ export async function inferDetailed(
   const maxTokens = opts?.maxTokens ?? 400;
 
   const result = streamText({
-    model: ollama(OLLAMA_MODEL),
+    model,
     system,
     prompt: inferPrompt,
     temperature,
@@ -91,6 +93,25 @@ export async function inferDetailed(
     raw,
     elapsed_ms: Date.now() - t0,
   };
+}
+
+/** Default inference using the global OLLAMA_MODEL. */
+export async function inferDetailed(
+  system: string,
+  prompt: string,
+  opts?: InferDetailedOptions,
+): Promise<InferenceResult> {
+  return _inferStreamCore(ollama(OLLAMA_MODEL), system, prompt, opts);
+}
+
+/** Variant that accepts an explicit model instance (used by inference_router). */
+export async function inferDetailedWithModel(
+  model: ReturnType<typeof ollama>,
+  system: string,
+  prompt: string,
+  opts?: InferDetailedOptions,
+): Promise<InferenceResult> {
+  return _inferStreamCore(model, system, prompt, opts);
 }
 
 export async function infer(system: string, prompt: string): Promise<string> {

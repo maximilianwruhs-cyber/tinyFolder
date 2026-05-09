@@ -1,25 +1,16 @@
-function readBoolEnv(name: string, defaultValue: boolean): boolean {
-  const raw = process.env[name];
-  if (raw === undefined) return defaultValue;
-  const v = raw.trim().toLowerCase();
-  if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
-  if (v === "0" || v === "false" || v === "no" || v === "off") return false;
-  return defaultValue;
-}
+import { inferByRole } from "./inference_router";
+import { readBoolEnv } from "./pipelines/helpers";
 
 /**
- * Local multi-query rewriting using Ollama (OpenAI-compatible endpoint).
+ * Local multi-query rewriting using Ollama via the model router.
+ * When GZMO_ENABLE_MODEL_ROUTING=on this uses the "fast" role (e.g. qwen2.5:0.5b).
  * Enable explicitly with `GZMO_MULTIQUERY=on`.
  */
 export async function rewriteQuery(params: {
   query: string;
-  ollamaBaseUrl?: string; // e.g. http://localhost:11434/v1
-  model?: string;
   timeoutMs?: number;
 }): Promise<string[]> {
   if (!readBoolEnv("GZMO_MULTIQUERY", false)) return [params.query];
-  const base = (params.ollamaBaseUrl ?? (process.env.OLLAMA_URL ?? "http://localhost:11434/v1")).replace(/\/$/, "");
-  const model = params.model ?? (process.env.OLLAMA_MODEL ?? "hermes3:8b");
   const timeoutMs = params.timeoutMs ?? 4500;
 
   const system = [
@@ -33,25 +24,16 @@ export async function rewriteQuery(params: {
   ].join("\n");
 
   try {
-    const resp = await fetch(`${base}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        temperature: 0.2,
-        max_tokens: 160,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: params.query },
-        ],
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
+    const result = await inferByRole("fast", system, params.query, {
+      temperature: 0.2,
+      maxTokens: 160,
     });
-    if (!resp.ok) return [params.query];
-    const data = await resp.json() as any;
-    const content = String(data?.choices?.[0]?.message?.content ?? "").trim();
+
+    const content = result.answer.trim();
     const parsed = JSON.parse(content) as { rewrites?: string[] };
-    const rewrites = Array.isArray(parsed.rewrites) ? parsed.rewrites.map((s) => String(s).trim()).filter(Boolean) : [];
+    const rewrites = Array.isArray(parsed.rewrites)
+      ? parsed.rewrites.map((s) => String(s).trim()).filter(Boolean)
+      : [];
     const uniq = [...new Set([params.query, ...rewrites])].slice(0, 4);
     return uniq.length ? uniq : [params.query];
   } catch {

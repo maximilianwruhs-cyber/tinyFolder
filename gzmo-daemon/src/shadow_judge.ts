@@ -1,4 +1,5 @@
 import { streamText } from "ai";
+import { inferByRole } from "./inference_router";
 
 export interface ShadowJudgeResult {
   score: number; // 0..1
@@ -45,7 +46,7 @@ export function parseJudgeScore(raw: string): { score: number; trace: string; pa
 }
 
 export async function shadowJudge(params: {
-  model: any;
+  model?: any; // legacy: ignored when model routing is on; use inferByRole("judge") internally
   userPrompt: string;
   answer: string;
   evidenceContext?: string;
@@ -77,19 +78,12 @@ export async function shadowJudge(params: {
     "- Output must follow the exact format in the rubric.",
   ].join("\n");
 
-  const result = streamText({
-    model: params.model,
-    system,
-    prompt,
+  const result = await inferByRole("judge", system, prompt, {
     temperature: 0.1,
     maxTokens,
-  } as any);
+  });
 
-  let raw = "";
-  for await (const chunk of result.textStream) raw += chunk;
-  raw = raw.trim();
-
-  const parsed = parseJudgeScore(raw);
-  return { score: parsed.score, trace: parsed.trace, raw, parseOk: parsed.parseOk };
+  const parsed = parseJudgeScore(result.raw);
+  return { score: parsed.score, trace: parsed.trace, raw: result.raw, parseOk: parsed.parseOk };
 }
 

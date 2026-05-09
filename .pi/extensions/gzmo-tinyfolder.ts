@@ -161,6 +161,14 @@ type SessionUiHandles = {
 
 const sessionLiveWatch = new Map<string, SessionUiHandles>();
 const sessionNotifyPaths = new Map<string, Set<string>>();
+const sessionSseClose = new Map<string, () => void>();
+
+/**
+ * If the /gzmo dashboard is currently mounted, its TUI handle lives here so
+ * external events (SSE task_completed) can poke `requestRender()` / `refresh()`.
+ * The /gzmo handler must null this on close to avoid stale-closure crashes.
+ */
+let dashboardRenderer: { requestRender: () => void; refresh: () => Promise<void> } | null = null;
 
 function getSessionHandles(sessionId: string): SessionUiHandles {
   let h = sessionLiveWatch.get(sessionId);
@@ -202,6 +210,60 @@ function stopLiveWatch(sessionId: string): void {
     sessionLiveWatch.delete(sessionId);
   }
   sessionNotifyPaths.delete(sessionId);
+  const closeSse = sessionSseClose.get(sessionId);
+  if (closeSse) {
+    try { closeSse(); } catch { /* ignore */ }
+    sessionSseClose.delete(sessionId);
+  }
+}
+
+async function maybeWarnLocalOnly(pi: ExtensionAPI): Promise<void> {
+  if (process.env.GZMO_LOCAL_ONLY !== "1") return;
+  const provider = process.env.OPENAI_BASE_URL ?? process.env.PI_BASE_URL ?? "";
+  if (!provider) return;
+  if (provider.includes("localhost") || provider.includes("127.")) return;
+  pi.sendMessage(
+    {
+      customType: "gzmo-local-only-warning",
+      content:
+        `GZMO_LOCAL_ONLY=1 is set, but the Pi LLM provider URL (${provider}) is not loopback. ` +
+        "Switch Pi to a localhost provider (e.g. http://localhost:11434/v1) for full local mode.",
+      display: true,
+    },
+    { triggerTurn: false },
+  );
+}
+
+async function attachApiSseListener(pi: ExtensionAPI, ctx: ExtensionContext, sessionId: string): Promise<void> {
+  const existing = sessionSseClose.get(sessionId);
+  if (existing) {
+    try { existing(); } catch { /* ignore */ }
+    sessionSseClose.delete(sessionId);
+  }
+
+  const client = new GzmoApiClient();
+  const h = await client.health();
+  if (!h.ok) return;
+
+  const close = client.connectSSE((ev) => {
+    if (ev.type !== "task_completed" && ev.type !== "task_failed") return;
+    // Update footer status + dashboard FIRST so the UI reflects the new
+    // counts/model/VRAM before the chat message render is queued.
+    void updateUiStatus(ctx);
+    if (dashboardRenderer) {
+      void dashboardRenderer.refresh();
+    }
+    pi.sendMessage(
+      {
+        customType: "gzmo-task-api",
+        content: `GZMO API task ${ev.type.replace("task_", "")}: ${ev.task_id ?? "(no id)"}`,
+        display: true,
+        details: { task_id: ev.task_id, event: ev },
+      },
+      { triggerTurn: false },
+    );
+  });
+  sessionSseClose.set(sessionId, close);
 }
 
 async function reconstructTrackedTasks(ctx: ExtensionContext): Promise<void> {
@@ -321,6 +383,335 @@ function mkTaskFilename(): string {
   return `${ts}_${rand}.md`;
 }
 
+/* ── GZMO HTTP API client (Phase 2) ─────────────────────────────── */
+
+type ApiClientEnv = {
+  baseUrl: string;
+  socketPath: string | null;
+};
+
+function readApiClientEnv(): ApiClientEnv {
+  const socket = asNonEmptyString(process.env.GZMO_API_SOCKET) ?? "";
+  const host = asNonEmptyString(process.env.GZMO_API_HOST) ?? "127.0.0.1";
+  const port = asNonEmptyString(process.env.GZMO_API_PORT) ?? "12700";
+  if (socket && fs.existsSync(socket)) return { baseUrl: `http://unix:${socket}`, socketPath: socket };
+  return { baseUrl: `http://${host}:${port}`, socketPath: null };
+}
+
+type ApiSubmitOk = { ok: true; id: string; path?: string; status: string };
+type ApiCallErr = { ok: false; error: string; status?: number };
+type ApiHealthOk = { ok: true; data: ApiHealthShape };
+type ApiTaskOk = { ok: true; data: ApiTaskShape };
+type ApiSearchOk = { ok: true; answer: string; evidence?: string; trace_id?: string; task_path?: string };
+
+type ApiHealthShape = {
+  status: string;
+  version: string;
+  ollama_connected: boolean;
+  model_loaded: string;
+  embedding_model?: string;
+  pending_tasks: number;
+  processing_tasks: number;
+  uptime_seconds: number;
+  vault_path?: string;
+  vram_used_mb?: number;
+  vram_total_mb?: number;
+};
+
+type ApiTaskShape = {
+  id: string;
+  status: string;
+  action?: string;
+  body?: string;
+  output?: string;
+  evidence?: string;
+  error?: string;
+  started_at?: string;
+  completed_at?: string;
+  path?: string;
+};
+
+type ApiSearchAccepted = {
+  id: string;
+  status: string;
+  action: "search";
+  path: string;
+  stream_url: string;
+  task_url: string;
+};
+
+type ApiEventShape = {
+  type: "task_created" | "task_started" | "task_completed" | "task_failed" | "token" | "log";
+  task_id?: string;
+  data?: unknown;
+  timestamp: string;
+};
+
+/**
+ * Wait for an API task to reach `completed` or `failed`, primarily by
+ * subscribing to the daemon SSE stream. A periodic poll of /api/v1/task/:id
+ * acts as a backstop so callers still finish if SSE drops the event (network
+ * blip, idle reconnect, etc.). Either path is sufficient on its own.
+ */
+async function waitForApiTaskTerminal(
+  client: GzmoApiClient,
+  taskId: string,
+  maxSec: number,
+  pollSec: number,
+  signal?: AbortSignal,
+): Promise<"completed" | "failed"> {
+  return await new Promise<"completed" | "failed">((resolve, reject) => {
+    let settled = false;
+    let closeSse: (() => void) | null = null;
+    let pollTimer: NodeJS.Timeout | null = null;
+    let deadlineTimer: NodeJS.Timeout | null = null;
+    let abortHandler: (() => void) | null = null;
+
+    const cleanup = () => {
+      if (closeSse) {
+        try { closeSse(); } catch { /* ignore */ }
+        closeSse = null;
+      }
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      if (deadlineTimer) {
+        clearTimeout(deadlineTimer);
+        deadlineTimer = null;
+      }
+      if (abortHandler && signal) {
+        signal.removeEventListener("abort", abortHandler);
+        abortHandler = null;
+      }
+    };
+
+    const finish = (s: "completed" | "failed") => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(s);
+    };
+
+    const fail = (e: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(e);
+    };
+
+    closeSse = client.connectSSE((ev) => {
+      if (ev.task_id !== taskId) return;
+      if (ev.type === "task_completed") finish("completed");
+      else if (ev.type === "task_failed") finish("failed");
+    });
+
+    pollTimer = setInterval(() => {
+      void (async () => {
+        const t = await client.getTask(taskId, 3000);
+        if (!t.ok) return;
+        if (t.data.status === "completed") finish("completed");
+        else if (t.data.status === "failed") finish("failed");
+      })();
+    }, Math.max(1, pollSec) * 1000);
+
+    deadlineTimer = setTimeout(
+      () => fail(new Error(`Timeout after ${maxSec}s waiting for API task ${taskId}`)),
+      Math.max(1, maxSec) * 1000,
+    );
+
+    if (signal) {
+      if (signal.aborted) {
+        fail(new Error("Aborted"));
+        return;
+      }
+      abortHandler = () => fail(new Error("Aborted"));
+      signal.addEventListener("abort", abortHandler);
+    }
+  });
+}
+
+class GzmoApiClient {
+  readonly baseUrl: string;
+
+  constructor(env: ApiClientEnv = readApiClientEnv()) {
+    this.baseUrl = env.baseUrl;
+  }
+
+  private async fetchJson(pathSuffix: string, init?: RequestInit & { timeoutMs?: number }) {
+    const timeoutMs = init?.timeoutMs ?? 5000;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const r = await fetch(`${this.baseUrl}${pathSuffix}`, {
+        ...init,
+        signal: init?.signal ?? ac.signal,
+      });
+      const text = await r.text();
+      let data: any = null;
+      try {
+        data = text.length ? JSON.parse(text) : null;
+      } catch {
+        data = { raw: text };
+      }
+      return { r, data };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async health(timeoutMs = 2000): Promise<ApiHealthOk | ApiCallErr> {
+    try {
+      const { r, data } = await this.fetchJson("/api/v1/health", { timeoutMs });
+      if (!r.ok) return { ok: false, status: r.status, error: `HTTP ${r.status}` };
+      return { ok: true, data: data as ApiHealthShape };
+    } catch (e: unknown) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async submitTask(action: GzmoAction, body: string, chainNext?: string): Promise<ApiSubmitOk | ApiCallErr> {
+    try {
+      const payload: Record<string, unknown> = { action, body };
+      if (chainNext) payload.chain_next = chainNext;
+      const { r, data } = await this.fetchJson("/api/v1/task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        timeoutMs: 10_000,
+      });
+      if (!r.ok) return { ok: false, status: r.status, error: data?.error ?? `HTTP ${r.status}` };
+      return { ok: true, id: String(data.id), path: data.path, status: String(data.status ?? "pending") };
+    } catch (e: unknown) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async getTask(id: string, timeoutMs = 5000): Promise<ApiTaskOk | ApiCallErr> {
+    try {
+      const { r, data } = await this.fetchJson(`/api/v1/task/${encodeURIComponent(id)}`, { timeoutMs });
+      if (!r.ok) return { ok: false, status: r.status, error: data?.error ?? `HTTP ${r.status}` };
+      return { ok: true, data: data as ApiTaskShape };
+    } catch (e: unknown) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /**
+   * Submit a search task to /api/v1/search and return immediately. The server
+   * returns 202 Accepted with `stream_url` and `task_url`; callers then wait
+   * for completion via SSE (preferred) or polling /api/v1/task/:id.
+   */
+  async submitSearch(query: string): Promise<{ ok: true; data: ApiSearchAccepted } | ApiCallErr> {
+    try {
+      const { r, data } = await this.fetchJson("/api/v1/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+        timeoutMs: 10_000,
+      });
+      if (!r.ok) return { ok: false, status: r.status, error: data?.error ?? `HTTP ${r.status}` };
+      return { ok: true, data: data as ApiSearchAccepted };
+    } catch (e: unknown) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /**
+   * High-level search: submit (non-blocking) → wait for completion via SSE
+   * (with polling backstop) → fetch and return the answer + evidence packet.
+   * The HTTP server never holds a worker for the full duration, so concurrent
+   * /health and /task submits stay responsive while the search runs.
+   */
+  async search(query: string, maxSec = 120, signal?: AbortSignal): Promise<ApiSearchOk | ApiCallErr> {
+    const sub = await this.submitSearch(query);
+    if (!sub.ok) return sub;
+    const id = sub.data.id;
+
+    let terminal: "completed" | "failed";
+    try {
+      terminal = await waitForApiTaskTerminal(this, id, maxSec, 2, signal);
+    } catch (e: unknown) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+
+    const t = await this.getTask(id, 5000);
+    if (!t.ok) return t;
+    if (terminal === "failed") {
+      return {
+        ok: false,
+        error: t.data.error ?? "Search task failed",
+        status: 500,
+      };
+    }
+
+    const answer = t.data.output ?? t.data.body ?? "";
+    return {
+      ok: true,
+      answer,
+      evidence: t.data.evidence,
+      trace_id: id,
+      task_path: t.data.path ?? sub.data.path,
+    };
+  }
+
+  /**
+   * Subscribe to the daemon SSE stream. Returns a function that closes the
+   * underlying connection. Resilient to disconnects: callers are responsible
+   * for re-subscribing if they want long-lived listening.
+   */
+  connectSSE(onEvent: (ev: ApiEventShape) => void, onClose?: () => void): () => void {
+    const ac = new AbortController();
+    let closed = false;
+
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      try {
+        ac.abort();
+      } catch { /* ignore */ }
+      onClose?.();
+    };
+
+    (async () => {
+      try {
+        const r = await fetch(`${this.baseUrl}/api/v1/stream`, {
+          headers: { Accept: "text/event-stream" },
+          signal: ac.signal,
+        });
+        if (!r.ok || !r.body) {
+          close();
+          return;
+        }
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        while (!closed) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let eventEnd: number;
+          while ((eventEnd = buf.indexOf("\n\n")) >= 0) {
+            const block = buf.slice(0, eventEnd);
+            buf = buf.slice(eventEnd + 2);
+            for (const line of block.split("\n")) {
+              if (!line.startsWith("data:")) continue;
+              const payload = line.slice(5).trim();
+              if (!payload) continue;
+              try {
+                onEvent(JSON.parse(payload) as ApiEventShape);
+              } catch { /* malformed event */ }
+            }
+          }
+        }
+      } catch { /* aborted or network error */ }
+      close();
+    })();
+
+    return close;
+  }
+}
+
 /* ── inbox data ── */
 
 type TaskRow = { path: string; status: string | null; updated_at: string; action: string | null };
@@ -352,6 +743,21 @@ async function listInbox(filterStatus?: string | null, limit = 20): Promise<Task
 
 /* ── UI helpers ── */
 
+/**
+ * Render a 16-cell VRAM usage bar like `VRAM ███████░░░░░░░░░ 18/32GB`.
+ * Returns an empty string when either field is missing or zero, so the
+ * caller can simply concatenate without conditional spacing.
+ */
+function formatVramBar(used?: number, total?: number): string {
+  if (!used || !total || total <= 0) return "";
+  const ratio = Math.min(1, used / total);
+  const filled = Math.round(ratio * 16);
+  const bar = "█".repeat(filled) + "░".repeat(16 - filled);
+  const u = Math.round(used / 1024);
+  const t = Math.round(total / 1024);
+  return `VRAM ${bar} ${u}/${t}GB`;
+}
+
 async function updateUiStatus(ctx: ExtensionContext): Promise<void> {
   try {
     const { vaultPath } = await resolveVaultPath();
@@ -373,7 +779,15 @@ async function updateUiStatus(ctx: ExtensionContext): Promise<void> {
       }
     }
     const vaultName = path.basename(vaultPath);
-    const summary = `GZMO: ${pending} pending, ${processing} processing`;
+    const apiHealth = await new GzmoApiClient().health(800);
+    let summary: string;
+    if (apiHealth.ok) {
+      const vram = formatVramBar(apiHealth.data.vram_used_mb, apiHealth.data.vram_total_mb);
+      const badge = `API ${apiHealth.data.status} ● ${apiHealth.data.model_loaded}`;
+      summary = `GZMO: ${pending}p/${processing}a ● ${badge}` + (vram ? ` ● ${vram}` : "");
+    } else {
+      summary = `GZMO: ${pending}p/${processing}a ● API offline`;
+    }
     ctx.ui.setStatus("gzmo", summary);
 
     const liveStreamPath = path.join(vaultPath, "GZMO", "Live_Stream.md");
@@ -437,6 +851,10 @@ type DashboardState = {
   tasks: TaskRow[];
   liveLines: string[];
   healthText: string;
+  /** Currently loaded model (e.g. "qwen3:32b") or "(API offline)" when unreachable. */
+  model: string;
+  /** Pre-formatted VRAM bar string, or "" when no VRAM telemetry is available. */
+  vram: string;
 };
 
 class GzmoDashboardComponent {
@@ -475,6 +893,7 @@ class GzmoDashboardComponent {
     const th = this.theme;
     const lines: string[] = [];
     this._renderHeader(lines, th, width);
+    this._renderModelVram(lines, th, width);
     this._renderCounts(lines, th, width);
     this._renderTasks(lines, th, width);
     this._renderLive(lines, th, width);
@@ -491,6 +910,14 @@ class GzmoDashboardComponent {
       th.fg("borderMuted", "─".repeat(3)) + title + th.fg("borderMuted", "─".repeat(Math.max(0, width - 10)));
     lines.push("");
     lines.push(truncateToWidth(headerLine, width));
+    lines.push("");
+  }
+
+  private _renderModelVram(lines: string[], th: Theme, width: number) {
+    lines.push(truncateToWidth(
+      `  ${th.fg("muted", "model:")} ${th.fg("text", this.state.model)}  ${th.fg("accent", this.state.vram)}`,
+      width,
+    ));
     lines.push("");
   }
 
@@ -573,7 +1000,20 @@ async function fetchDashboardState(): Promise<DashboardState> {
   } catch {
     healthText = "(health not available)";
   }
-  return { pending, processing, vaultName, tasks, liveLines, healthText };
+
+  // Best-effort API probe: dashboard renders even when the daemon is down.
+  const client = new GzmoApiClient();
+  let model = "(API offline)";
+  let vram = "";
+  try {
+    const apiHealth = await client.health(1000);
+    if (apiHealth.ok) {
+      model = apiHealth.data.model_loaded;
+      vram = formatVramBar(apiHealth.data.vram_used_mb, apiHealth.data.vram_total_mb);
+    }
+  } catch { /* ignore — keep "(API offline)" defaults */ }
+
+  return { pending, processing, vaultName, tasks, liveLines, healthText, model, vram };
 }
 
 /* ── schemas ── */
@@ -622,6 +1062,22 @@ const QueryContextParams = Type.Object({
   poll_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 30, default: 2 })),
 });
 
+const ApiSearchParams = Type.Object({
+  query: Type.String({
+    description:
+      "Natural-language question. Calls the GZMO HTTP API directly (POST /api/v1/search) and blocks until the daemon returns an evidence-grounded answer. Falls back to the file-based search tool when the API is offline.",
+  }),
+  max_seconds: Type.Optional(Type.Integer({ minimum: 5, maximum: 900, default: 120 })),
+});
+
+const ApiThinkParams = Type.Object({
+  body: Type.String({ description: "Markdown body of a 'think' task to submit via the GZMO HTTP API." }),
+  max_seconds: Type.Optional(Type.Integer({ minimum: 5, maximum: 86400, default: 600 })),
+  poll_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 30, default: 2 })),
+});
+
+const ApiHealthParams = Type.Object({});
+
 /* ── main ── */
 
 export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
@@ -633,11 +1089,15 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
     const sid = ctx.sessionManager.getSessionId();
     await reconstructTrackedTasks(ctx);
     await attachGzmoWatchers(pi, ctx, sid);
+    await attachApiSseListener(pi, ctx, sid);
+    await maybeWarnLocalOnly(pi);
   });
 
   pi.on("session_tree", async (_event, ctx) => {
+    const sid = ctx.sessionManager.getSessionId();
     await reconstructTrackedTasks(ctx);
-    await attachGzmoWatchers(pi, ctx, ctx.sessionManager.getSessionId());
+    await attachGzmoWatchers(pi, ctx, sid);
+    await attachApiSseListener(pi, ctx, sid);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -1070,6 +1530,225 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
     },
   });
 
+  /* ── API: health ── */
+
+  pi.registerTool({
+    name: "gzmo_api_health",
+    label: "GZMO API health",
+    description:
+      "Probe the GZMO HTTP API at /api/v1/health. Returns daemon status, model, embedding model, and inbox counts.",
+    promptSnippet: "Check the GZMO daemon HTTP API health",
+    promptGuidelines: [
+      "Use gzmo_api_health to verify the daemon is reachable on its loopback HTTP API.",
+      "If this fails, the file-based tools (gzmo_submit_task, gzmo_query_context) still work but won't get streaming events.",
+    ],
+    parameters: ApiHealthParams,
+    async execute(): Promise<AgentToolResult<{ ok: boolean; data?: ApiHealthShape; error?: string }>> {
+      const client = new GzmoApiClient();
+      const h = await client.health(2000);
+      if (!h.ok) {
+        return {
+          content: [{ type: "text", text: `API offline: ${h.error}` }],
+          details: { ok: false, error: h.error },
+        };
+      }
+      const d = h.data;
+      const text = [
+        `status: ${d.status}`,
+        `version: ${d.version}`,
+        `ollama_connected: ${d.ollama_connected}`,
+        `model: ${d.model_loaded}`,
+        `embedding_model: ${d.embedding_model ?? "?"}`,
+        `pending: ${d.pending_tasks}`,
+        `processing: ${d.processing_tasks}`,
+        `uptime_seconds: ${d.uptime_seconds}`,
+        d.vault_path ? `vault: ${d.vault_path}` : "",
+      ].filter(Boolean).join("\n");
+      return { content: [{ type: "text", text }], details: { ok: true, data: d } };
+    },
+    renderCall(_args, theme) {
+      return new Text(theme.fg("toolTitle", theme.bold("GZMO API health")), 0, 0);
+    },
+    renderResult(result, _opts, theme, _ctx) {
+      const d = result.details as { ok?: boolean; data?: ApiHealthShape; error?: string } | undefined;
+      if (!d?.ok) return new Text(theme.fg("error", `❌ ${d?.error ?? "API offline"}`), 0, 0);
+      const x = d.data!;
+      const col = x.status === "healthy" ? "success" : x.status === "degraded" ? "warning" : "error";
+      return new Text(
+        theme.fg(col, `● ${x.status}`) +
+          theme.fg("muted", `  ${x.model_loaded}  ${x.pending_tasks}p/${x.processing_tasks}a`),
+        0,
+        0,
+      );
+    },
+  });
+
+  /* ── API: synchronous search ── */
+
+  pi.registerTool({
+    name: "gzmo_api_search",
+    label: "GZMO API search",
+    description:
+      "Run a vault search via the GZMO HTTP API. The server submits the search task non-blocking (POST /api/v1/search returns 202 in milliseconds) and this tool waits for completion via SSE (with a polling backstop), then returns the grounded answer plus the evidence packet. Falls back to the file-based gzmo_query_context flow if the API is offline.",
+    promptSnippet: "Search the GZMO vault via the HTTP API (async over SSE)",
+    promptGuidelines: [
+      "Prefer gzmo_api_search over gzmo_query_context when the daemon's HTTP API is enabled — submit returns immediately and completion is delivered via SSE, so the daemon stays responsive to other requests.",
+      "If the API is unreachable, this tool transparently falls back to the file-based flow.",
+    ],
+    parameters: ApiSearchParams,
+    async execute(
+      _toolCallId: string,
+      params: Static<typeof ApiSearchParams>,
+      signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext,
+    ): Promise<AgentToolResult<{ via: "api" | "file"; answer: string; evidence?: string; trace_id?: string; task_path?: string }>> {
+      const q = asNonEmptyString(params.query);
+      if (!q) throw new Error("query is required");
+      const maxSec = typeof params.max_seconds === "number" ? params.max_seconds : 120;
+
+      const client = new GzmoApiClient();
+      const h = await client.health(800);
+      if (h.ok) {
+        const r = await client.search(q, maxSec, signal);
+        if (r.ok) {
+          await updateUiStatus(ctx);
+          const text = r.evidence ? `${r.evidence}\n\n## GZMO Response\n\n${r.answer}` : r.answer;
+          return {
+            content: [{ type: "text", text }],
+            details: { via: "api", answer: r.answer, evidence: r.evidence, trace_id: r.trace_id, task_path: r.task_path },
+          };
+        }
+        ctx.ui.notify(`API search error: ${r.error}; falling back to file-based search.`, "warning");
+      } else {
+        ctx.ui.notify("GZMO API offline; falling back to file-based search.", "warning");
+      }
+
+      const { vaultPath } = await resolveVaultPath();
+      const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
+      const filePath = path.join(inboxDir, mkTaskFilename());
+      const fm = makeTaskFrontmatter("search");
+      const body = `## Pi context query (api fallback)\n\n${q}\n`;
+      await atomicWriteFile(filePath, `${fm}${body}`);
+      const finalStatus = await waitForTerminalTaskStatus(filePath, signal, maxSec, 2);
+      const md = await fsp.readFile(filePath, "utf8");
+      const injected = extractInjectedContext(md);
+      await updateUiStatus(ctx);
+      if (finalStatus === "failed") {
+        return {
+          content: [{ type: "text", text: `Search task failed. Excerpt:\n\n${injected}` }],
+          details: { via: "file", answer: injected, task_path: filePath },
+        };
+      }
+      return {
+        content: [{ type: "text", text: injected }],
+        details: { via: "file", answer: injected, task_path: filePath },
+      };
+    },
+    renderCall(args, theme) {
+      const q = asNonEmptyString(args.query)?.replace(/\s+/g, " ").slice(0, 56) ?? "";
+      return new Text(
+        theme.fg("toolTitle", theme.bold("GZMO API search ")) + theme.fg("dim", q) + (q.length >= 56 ? "…" : ""),
+        0,
+        0,
+      );
+    },
+    renderResult(result, { isPartial, expanded }, theme, _ctx) {
+      if (isPartial) return new Text(theme.fg("warning", "🔍 Querying GZMO API…"), 0, 0);
+      const d = result.details as { via?: string; answer?: string } | undefined;
+      const via = d?.via === "api" ? "API" : "file";
+      const txt = d?.answer ?? (result.content[0]?.type === "text" ? result.content[0].text : "");
+      const preview = expanded ? txt : txt.split("\n").slice(0, 5).join("\n");
+      return new Text(theme.fg("success", `✓ via ${via}\n`) + theme.fg("muted", preview), 0, 0);
+    },
+  });
+
+  /* ── API: think (submit + poll) ── */
+
+  pi.registerTool({
+    name: "gzmo_api_think",
+    label: "GZMO API think",
+    description:
+      "Submit a 'think' task via the GZMO HTTP API and block until the daemon completes it. Falls back to the file-based gzmo_submit_task + gzmo_watch_task flow when the API is offline.",
+    promptSnippet: "Submit a GZMO think task via the HTTP API",
+    promptGuidelines: [
+      "Use gzmo_api_think for one-shot 'think' work that needs the daemon's chaos-modulated parameters and traces.",
+      "Falls back to the file-based flow when the API is unreachable, so callers can rely on it unconditionally.",
+    ],
+    parameters: ApiThinkParams,
+    async execute(
+      _toolCallId: string,
+      params: Static<typeof ApiThinkParams>,
+      signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext,
+    ): Promise<AgentToolResult<{ via: "api" | "file"; status: string; output: string; task_id?: string; task_path?: string }>> {
+      const body = asNonEmptyString(params.body);
+      if (!body) throw new Error("body is required");
+      const maxSec = typeof params.max_seconds === "number" ? params.max_seconds : 600;
+      const pollSec = typeof params.poll_seconds === "number" ? params.poll_seconds : 2;
+
+      const client = new GzmoApiClient();
+      const h = await client.health(800);
+      if (h.ok) {
+        const sub = await client.submitTask("think", body);
+        if (sub.ok) {
+          ctx.ui.notify(`GZMO API think submitted (id=${sub.id})`, "info");
+          const deadline = Date.now() + maxSec * 1000;
+          while (Date.now() < deadline) {
+            if (signal?.aborted) throw new Error("Aborted");
+            await new Promise((r) => setTimeout(r, Math.max(1, pollSec) * 1000));
+            const t = await client.getTask(sub.id);
+            if (!t.ok) continue;
+            const s = t.data.status;
+            if (s === "completed" || s === "failed") {
+              await updateUiStatus(ctx);
+              const out = t.data.output ?? t.data.body ?? "(no output)";
+              return {
+                content: [{ type: "text", text: `status: ${s}\n\n${out}` }],
+                details: { via: "api", status: s, output: out, task_id: sub.id, task_path: sub.path },
+              };
+            }
+          }
+          throw new Error(`API think timed out after ${maxSec}s (task id ${sub.id})`);
+        }
+        ctx.ui.notify(`API submit error: ${sub.error}; falling back to file-based think.`, "warning");
+      } else {
+        ctx.ui.notify("GZMO API offline; falling back to file-based think.", "warning");
+      }
+
+      const { vaultPath } = await resolveVaultPath();
+      const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
+      const filePath = path.join(inboxDir, mkTaskFilename());
+      const fm = makeTaskFrontmatter("think");
+      await atomicWriteFile(filePath, `${fm}${body}\n`);
+      const finalStatus = await waitForTerminalTaskStatus(filePath, signal, maxSec, pollSec);
+      const excerpt = await tailLines(filePath, 200);
+      await updateUiStatus(ctx);
+      return {
+        content: [{ type: "text", text: `final_status: ${finalStatus}\n\n${excerpt}` }],
+        details: { via: "file", status: finalStatus, output: excerpt, task_path: filePath },
+      };
+    },
+    renderCall(args, theme) {
+      const tail = asNonEmptyString(args.body)?.replace(/\s+/g, " ").slice(0, 48) ?? "";
+      return new Text(
+        theme.fg("toolTitle", theme.bold("GZMO API think ")) + theme.fg("dim", `${tail}${tail.length >= 48 ? "…" : ""}`),
+        0,
+        0,
+      );
+    },
+    renderResult(result, { isPartial, expanded }, theme, _ctx) {
+      if (isPartial) return new Text(theme.fg("warning", "💭 GZMO thinking…"), 0, 0);
+      const d = result.details as { via?: string; status?: string; output?: string } | undefined;
+      const st = d?.status ?? "?";
+      const stColor = st === "completed" ? "success" : st === "failed" ? "error" : "muted";
+      const out = d?.output ?? "";
+      const preview = expanded ? out : out.split("\n").slice(0, 6).join("\n");
+      return new Text(theme.fg(stColor, `[${d?.via ?? "?"}] status: ${st}`) + "\n" + theme.fg("dim", preview), 0, 0);
+    },
+  });
+
   /* ── commands ── */
 
   pi.registerCommand("gzmo", {
@@ -1091,7 +1770,26 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
       let component: GzmoDashboardComponent | null = null;
 
       await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
-        component = new GzmoDashboardComponent(state, theme, () => done());
+        // Critical: null `dashboardRenderer` on close so SSE callbacks don't
+        // poke a dead TUI handle (Esc, Ctrl+C, or any other dismissal path).
+        component = new GzmoDashboardComponent(state, theme, () => {
+          dashboardRenderer = null;
+          done();
+        });
+
+        dashboardRenderer = {
+          requestRender: () => _tui.requestRender(),
+          refresh: async () => {
+            try {
+              const s = await fetchDashboardState();
+              state = s;
+              component?.setState(s);
+              _tui.requestRender();
+            } catch {
+              /* ignore refresh errors */
+            }
+          },
+        };
 
         return {
           render: (width: number) => component!.render(width),
@@ -1126,6 +1824,154 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
       const lines = tasks.map((t) => `- ${t.status ?? "?"} ${t.action ?? "?"}  ${t.path}`);
       ctx.ui.notify(lines.join("\n") || "(no tasks)", "info");
       await updateUiStatus(ctx);
+    },
+  });
+
+  pi.registerCommand("gzmo-api-health", {
+    description: "Probe the GZMO HTTP API at /api/v1/health and pretty-print the response.",
+    handler: async (_args, ctx) => {
+      const client = new GzmoApiClient();
+      const h = await client.health(2000);
+      if (!h.ok) {
+        ctx.ui.notify(`GZMO API offline at ${client.baseUrl}: ${h.error}`, "error");
+        return;
+      }
+      const d = h.data;
+      const lines = [
+        `endpoint: ${client.baseUrl}`,
+        `status: ${d.status}`,
+        `version: ${d.version}`,
+        `model: ${d.model_loaded}`,
+        `embedding_model: ${d.embedding_model ?? "?"}`,
+        `ollama_connected: ${d.ollama_connected}`,
+        `pending: ${d.pending_tasks}`,
+        `processing: ${d.processing_tasks}`,
+        `uptime_seconds: ${d.uptime_seconds}`,
+        d.vault_path ? `vault: ${d.vault_path}` : "",
+      ].filter(Boolean);
+      ctx.ui.notify(lines.join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("gzmo-trace", {
+    description: "Display the reasoning trace for a task by partial trace_id. Usage: /gzmo-trace <id-prefix>",
+    handler: async (args, ctx) => {
+      const raw = typeof args === "string" ? args.trim() : "";
+      if (!raw) {
+        ctx.ui.notify("Usage: /gzmo-trace <id-prefix>", "warning");
+        return;
+      }
+      const { vaultPath } = await resolveVaultPath();
+      const traceDir = path.join(vaultPath, "GZMO", "Reasoning_Traces");
+      let entries: string[];
+      try {
+        entries = await fsp.readdir(traceDir);
+      } catch {
+        ctx.ui.notify(`No traces directory at ${traceDir}`, "warning");
+        return;
+      }
+      const matches = entries.filter((f) => f.includes(raw) && f.endsWith(".json"));
+      if (matches.length === 0) {
+        ctx.ui.notify(`No trace matching "${raw}" in ${traceDir}`, "warning");
+        return;
+      }
+      const file = path.join(traceDir, matches[0]!);
+      let parsed: any;
+      try {
+        parsed = JSON.parse(await fsp.readFile(file, "utf8"));
+      } catch (e: unknown) {
+        ctx.ui.notify(`Failed to parse ${file}: ${e instanceof Error ? e.message : String(e)}`, "error");
+        return;
+      }
+      const head = [
+        `trace_id: ${parsed.trace_id ?? "?"}`,
+        `task_file: ${parsed.task_file ?? "?"}`,
+        `action: ${parsed.action ?? "?"}`,
+        `model: ${parsed.model ?? "?"}`,
+        `total_elapsed_ms: ${parsed.total_elapsed_ms ?? "?"}`,
+        `status: ${parsed.status ?? "?"}`,
+        `nodes: ${Array.isArray(parsed.nodes) ? parsed.nodes.length : "?"}`,
+        "── nodes ──",
+      ];
+      const nodes: any[] = Array.isArray(parsed.nodes) ? parsed.nodes : [];
+      const nodeLines = nodes.slice(0, 40).map((n) => {
+        const indent = "  ".repeat(Math.max(0, Number(n.depth ?? 0)));
+        return `${indent}[${n.type ?? "?"}] ${(n.prompt_summary ?? "").toString().slice(0, 80)}`;
+      });
+      ctx.ui.notify([...head, ...nodeLines].join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("gzmo-model", {
+    description: "List Ollama models available locally and notify which one is the active GZMO model.",
+    handler: async (_args, ctx) => {
+      const ollamaUrl = (process.env.OLLAMA_URL ?? "http://localhost:11434").replace(/\/v1\/?$/, "");
+      let names: string[] = [];
+      try {
+        const r = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });
+        if (!r.ok) {
+          ctx.ui.notify(`Ollama unreachable at ${ollamaUrl}: HTTP ${r.status}`, "error");
+          return;
+        }
+        const data = (await r.json()) as { models?: Array<{ name?: string }> };
+        names = (data.models ?? []).map((m) => m.name ?? "").filter(Boolean);
+      } catch (e: unknown) {
+        ctx.ui.notify(`Ollama unreachable at ${ollamaUrl}: ${e instanceof Error ? e.message : String(e)}`, "error");
+        return;
+      }
+      const active = process.env.OLLAMA_MODEL ?? "(unset)";
+      const lines = [
+        `Ollama: ${ollamaUrl}`,
+        `Active GZMO model (OLLAMA_MODEL): ${active}`,
+        "── installed ──",
+        ...names.map((n) => (n === active ? `* ${n}` : `  ${n}`)),
+      ];
+      ctx.ui.notify(lines.join("\n"), "info");
+    },
+  });
+
+  // Notify-only by design. We deliberately don't spawn the daemon from here:
+  // it would hold an orphan child process tied to the pi session lifecycle and
+  // double-fork around systemd, which is a known footgun.
+  pi.registerCommand("gzmo-start", {
+    description: "Show the shell command to start the GZMO daemon (user must run it in a separate terminal).",
+    handler: async (_args, ctx) => {
+      // extension lives at <repo>/.pi/extensions/gzmo-tinyfolder.ts
+      const repoRoot = path.resolve(extensionDir, "..", "..");
+      const daemonDir = path.join(repoRoot, "gzmo-daemon");
+      if (!(await fileExists(path.join(daemonDir, "package.json")))) {
+        ctx.ui.notify("Could not locate gzmo-daemon/ relative to the extension. Start it manually.", "warning");
+        return;
+      }
+
+      let profile = "core";
+      try {
+        const envFile = await walkForEnv(process.cwd());
+        if (envFile) {
+          const parsed = await parseDotEnvFile(envFile);
+          profile = asNonEmptyString(parsed["GZMO_PROFILE"]) ?? "core";
+        }
+      } catch { /* ignore — fall back to "core" */ }
+
+      const cmd = `cd ${daemonDir} && GZMO_PROFILE=${profile} bun run summon`;
+      ctx.ui.notify(
+        `To start the GZMO daemon, run the following command in a separate terminal:\n\n${cmd}\n\n` +
+          "Once started, the extension will auto-detect the API within a few seconds. " +
+          "Press 'r' inside /gzmo to force a refresh.",
+        "info",
+      );
+    },
+  });
+
+  pi.registerCommand("gzmo-stop", {
+    description: "Show instructions to stop the GZMO daemon.",
+    handler: async (_args, ctx) => {
+      ctx.ui.notify(
+        "To stop the GZMO daemon:\n" +
+          "  systemctl --user stop gzmo-daemon   (if you installed the systemd user unit)\n" +
+          "  or press Ctrl+C in the terminal running `bun run summon`",
+        "info",
+      );
     },
   });
 }

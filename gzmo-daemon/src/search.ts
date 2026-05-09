@@ -281,7 +281,7 @@ export async function searchVaultHybrid(
   const baseV1 = (process.env.OLLAMA_URL ?? "http://localhost:11434/v1");
   const rewrites = mode === "fast"
     ? [query]
-    : await rewriteQuery({ query, ollamaBaseUrl: baseV1 });
+    : await rewriteQuery({ query });
 
   const denseAll: SearchResult[] = [];
   const lexAll: SearchResult[] = [];
@@ -342,14 +342,12 @@ export async function searchVaultHybrid(
   };
   fused = forceIncludePaths(fused);
 
-  // Optional LLM reranker (best-effort). Uses OpenAI-compatible base URL, not /api.
+  // Optional LLM reranker (best-effort). Uses model router (rerank role when routing on).
   if (mode === "deep") {
     fused = await rerankWithLLM({
       query,
       candidates: fused,
-      ollamaBaseUrl: baseV1,
       maxCandidates: 12,
-      timeoutMs: 6000,
     });
   }
   fused = forceIncludePaths(fused);

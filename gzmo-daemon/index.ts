@@ -29,6 +29,8 @@ import { writeOpsOutputsArtifacts } from "./src/ops_outputs_artifact";
 import { readBoolEnv } from "./src/pipelines/helpers";
 import { atomicWriteJson } from "./src/vault_fs";
 import { invalidateEmbeddingSearchCache } from "./src/search";
+import { startApiServer } from "./src/api_server";
+import type { Server } from "bun";
 
 // ── Global Abort Controller (for graceful shutdown of in-flight inference) ──
 export const daemonAbort = new AbortController();
@@ -205,6 +207,9 @@ async function bootEmbeddings(): Promise<void> {
 // ── Initialize Watcher (declared here, started after Ollama gate) ──
 const watcher = new VaultWatcher(INBOX_PATH);
 
+// ── HTTP API server (declared here, started after Ollama gate when enabled) ──
+let apiServer: Server<unknown> | undefined;
+
 let activeTaskCount = 0;
 let lastTaskCompletedAt = 0;
 
@@ -307,6 +312,17 @@ async function inboxHasPending(): Promise<boolean> {
     watcher.start();
   } else {
     console.log("[WATCHER] Inbox watcher disabled by profile.");
+  }
+
+  if (readBoolEnv("GZMO_API_ENABLED", false)) {
+    try {
+      apiServer = startApiServer();
+    } catch (err: any) {
+      console.error(`[API] Failed to start: ${err?.message ?? err}`);
+      stream.log(`🔴 API server failed to start: ${err?.message ?? err}`);
+    }
+  } else {
+    console.log("[API] Disabled (set GZMO_API_ENABLED=1 in .env to enable).");
   }
 })();
 
@@ -553,6 +569,14 @@ async function shutdown(signal: string) {
   console.log(`\n[DAEMON] Received ${signal}. Shutting down...`);
   stream.log(`🔴 Daemon shutting down (${signal}).`);
   daemonAbort.abort();
+  if (apiServer) {
+    try {
+      console.log("[API] Stopping server...");
+      apiServer.stop(true);
+    } catch (err: any) {
+      console.warn(`[API] Stop error: ${err?.message ?? err}`);
+    }
+  }
   stream.destroy();
   pulse?.stop();
   await watcher.stop();

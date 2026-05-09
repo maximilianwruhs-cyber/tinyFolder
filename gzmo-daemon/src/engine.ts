@@ -38,6 +38,7 @@ import { atomicWriteJson } from "./vault_fs";
 import { SearchPipeline } from "./pipelines/search_pipeline";
 import { ThinkPipeline } from "./pipelines/think_pipeline";
 import { inferDetailed, OLLAMA_MODEL } from "./inference";
+import { inferByRole } from "./inference_router";
 export { infer, inferDetailed, type InferenceResult, OLLAMA_MODEL } from "./inference";
 import {
   appendTraceIndex,
@@ -57,6 +58,15 @@ import {
   learningEnabled,
   loadLedger,
 } from "./learning/ledger";
+import { broadcastEvent } from "./api_events";
+
+function getApiId(frontmatter: Record<string, unknown> | undefined | null): string | undefined {
+  if (!frontmatter) return undefined;
+  const raw = frontmatter.api_id;
+  if (typeof raw !== "string") return undefined;
+  const t = raw.trim();
+  return t.length ? t : undefined;
+}
 
 // ── Task Actions ───────────────────────────────────────────
 type TaskAction = "think" | "search" | "chain";
@@ -162,6 +172,16 @@ export async function processTask(
     bodyLength: String(body ?? "").length,
   });
 
+  const apiId = getApiId(frontmatter);
+  if (apiId) {
+    broadcastEvent({
+      type: "task_started",
+      task_id: apiId,
+      data: { fileName, action: String(frontmatter?.action ?? "think") },
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   const traceId = crypto.randomUUID();
   const traceNodes: ReasoningNode[] = [];
   const taskRelPath = relative(resolve(vaultRoot), resolve(filePath)).replace(/\\/g, "/");
@@ -250,9 +270,12 @@ export async function processTask(
       // Prefer ToT's own strategy injection measurement when present.
       if (typeof totOut.strategyInjected === "boolean") strategyInjected = totOut.strategyInjected;
     } else if (!usedDeterministic) {
-      const inferResult = await span("llm.stream", async () =>
-        inferDetailed(systemPromptWithStrategy, body, { temperature: temp, maxTokens: maxTok }),
-      );
+      const inferResult = await span("llm.stream", async () => {
+        const opts = { temperature: temp, maxTokens: maxTok };
+        return readBoolEnv("GZMO_ENABLE_MODEL_ROUTING", false)
+          ? inferByRole("reason", systemPromptWithStrategy, body, opts)
+          : inferDetailed(systemPromptWithStrategy, body, opts);
+      });
       inferElapsed = inferResult.elapsed_ms;
       rawOutput = inferResult.answer;
       if (tracesEnabled() && inferResult.thinking) {
@@ -431,6 +454,21 @@ export async function processTask(
       durationMs,
     });
 
+    if (apiId) {
+      broadcastEvent({
+        type: "task_completed",
+        task_id: apiId,
+        data: {
+          fileName,
+          file_path: filePath,
+          action: String(frontmatter?.action ?? "think"),
+          duration_ms: durationMs,
+          trace_id: traceId,
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     if (action === "chain" && frontmatter?.chain_next) {
       const { basename, dirname, join } = await import("path");
       let nextTask = basename(String(frontmatter.chain_next));
@@ -516,6 +554,20 @@ export async function processTask(
       action: String(frontmatter?.action ?? "think"),
       errorType: err?.message ?? "unknown",
     });
+
+    if (apiId) {
+      broadcastEvent({
+        type: "task_failed",
+        task_id: apiId,
+        data: {
+          fileName,
+          file_path: filePath,
+          action: String(frontmatter?.action ?? "think"),
+          error: err?.message ?? "unknown",
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
 
   } finally {
     setTimeout(() => watcher.unlockFile(filePath), 1000);
