@@ -36,15 +36,27 @@ import { daemonAbort } from "./src/lifecycle";
 import { TaskSemaphore, readTaskConcurrency } from "./src/task_semaphore";
 import { sweepOldTraces } from "./src/reasoning_trace";
 import { startVramProbe, stopVramProbe } from "./src/vram_probe";
+import { loadConfig } from "./src/config";
+
+// Rate-limited warnings so a persistent disk/permission error doesn't spam logs.
+const _warnedAt = new Map<string, number>();
+function warnEvery(key: string, message: string, intervalMs = 60_000): void {
+  const now = Date.now();
+  const last = _warnedAt.get(key) ?? 0;
+  if (now - last < intervalMs) return;
+  _warnedAt.set(key, now);
+  console.warn(message);
+}
 
 // Re-export so any existing tooling that imported `daemonAbort` from index.ts
 // keeps working. The canonical home is now ./src/lifecycle.
 export { daemonAbort };
 
-// ── Resolve Vault Path ─────────────────────────────────────
-const VAULT_PATH = process.env.VAULT_PATH ?? resolve(import.meta.dir, "../vault");
-const INBOX_PATH = join(VAULT_PATH, "GZMO", "Inbox");
-const OLLAMA_API_URL = process.env.OLLAMA_URL?.replace("/v1", "") ?? "http://localhost:11434";
+// ── Resolve + validate critical config (fail-fast) ─────────
+const config = loadConfig();
+const VAULT_PATH = config.vaultPath;
+const INBOX_PATH = config.inboxPath;
+const OLLAMA_API_URL = config.ollamaUrl;
 
 // ── Runtime profile (safe mode) ────────────────────────────
 const runtime = resolveRuntimeProfile();
@@ -66,7 +78,7 @@ console.log("  ⚡ Chaos Engine + Allostasis + Vault RAG");
 console.log("═══════════════════════════════════════════════");
 console.log(`  Vault:  ${VAULT_PATH}`);
 console.log(`  Inbox:  ${INBOX_PATH}`);
-console.log(`  Model:  ${process.env.OLLAMA_MODEL ?? "hermes3:8b"}`);
+console.log(`  Model:  ${config.ollamaModel}`);
 console.log(`  Ollama: ${OLLAMA_API_URL}`);
 console.log(`  Profile:${describeRuntimeProfile(runtime)}`);
 console.log("═══════════════════════════════════════════════");
@@ -167,7 +179,13 @@ if (needsPulse) {
        "---",
        `*The Lorenz attractor's trajectory has been permanently altered.*`,
      ].join("\n");
-     safeWriteText(VAULT_PATH, filepath, content).catch(() => {});
+     safeWriteText(VAULT_PATH, filepath, content).catch((err) => {
+       warnEvery(
+         "write.crystallization",
+         `[WRITE] Failed to persist crystallization note (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+         60_000,
+       );
+     });
    }
   });
   stream.log("🟢 Daemon started. Chaos Engine at 174 BPM.");
@@ -625,7 +643,13 @@ setInterval(async () => {
       cabinetNotes,
       quarantineNotes,
     },
-  }).catch(() => {});
+  }).catch((err) => {
+    warnEvery(
+      "write.health",
+      `[HEALTH] Failed to write health report (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      60_000,
+    );
+  });
 }, 60_000);
 
 // ── Graceful Shutdown ──────────────────────────────────────

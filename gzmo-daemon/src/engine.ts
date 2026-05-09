@@ -59,6 +59,7 @@ import {
   loadLedger,
 } from "./learning/ledger";
 import { broadcastEvent } from "./api_events";
+import { appendErrorEvent } from "./error_events";
 
 function getApiId(frontmatter: Record<string, unknown> | undefined | null): string | undefined {
   if (!frontmatter) return undefined;
@@ -546,7 +547,39 @@ export async function processTask(
 
     try {
       await document.markFailed(err?.message || "Unknown error");
-    } catch {}
+    } catch (markErr: any) {
+      console.error(
+        `[ENGINE] Failed to persist failure status for ${fileName}: ${markErr?.message ?? markErr}`,
+      );
+      try {
+        if (vaultRoot) {
+          await appendErrorEvent(vaultRoot, {
+            tier: "fatal",
+            subsystem: "task_persistence",
+            message: "Failed to write task failure status (vault may be read-only or full).",
+            task_file: taskRelPath,
+            trace_id: traceId,
+            extra: { error: String(markErr?.message ?? markErr) },
+          });
+        }
+      } catch {
+        // If the vault is unwritable, even the error event can't be persisted.
+      }
+    }
+
+    try {
+      if (vaultRoot) {
+        await appendErrorEvent(vaultRoot, {
+          tier: "degraded",
+          subsystem: "engine",
+          message: err?.message ?? "Unknown error",
+          task_file: taskRelPath,
+          trace_id: traceId,
+        });
+      }
+    } catch {
+      // best-effort
+    }
 
     pulse?.emitEvent({
       type: "task_failed",

@@ -14,6 +14,17 @@ import { safeWriteText } from "./vault_fs";
 const MAX_LINES = 200;      // Keep the stream manageable
 const FLUSH_INTERVAL = 5000; // Flush every 5 seconds
 const FLUSH_THRESHOLD = 10;  // Or after 10 queued entries
+const MAX_BUFFER_ENTRIES = 2000; // Cap in-memory backlog if disk is unwritable
+
+// Rate-limited warnings so persistent disk errors don't spam logs.
+const _warnedAt = new Map<string, number>();
+function warnEvery(key: string, message: string, intervalMs = 60_000): void {
+  const now = Date.now();
+  const last = _warnedAt.get(key) ?? 0;
+  if (now - last < intervalMs) return;
+  _warnedAt.set(key, now);
+  console.warn(message);
+}
 
 export class LiveStream {
   private readonly filePath: string;
@@ -36,7 +47,11 @@ export class LiveStream {
     // Bun.file().size is 0 for non-existent files — use this as existence check
     if (file.size === 0) {
       safeWriteText(this.vaultPath, this.filePath, `# GZMO Live Stream\n*Auto-scroll to follow daemon state*\n\n`)
-        .catch(() => {}); // fire-and-forget initialization
+        .catch((err) => {
+          // If the vault is unwritable (permissions/disk-full), we want at least
+          // one visible signal in stderr.
+          console.warn(`[STREAM] Failed to initialize Live_Stream.md: ${err instanceof Error ? err.message : String(err)}`);
+        });
     }
   }
 
@@ -79,8 +94,24 @@ export class LiveStream {
         // Append all buffered lines at once
         content += entries.join("");
         await safeWriteText(this.vaultPath, this.filePath, content);
-      } catch {
-        // If the file was deleted or locked, entries are discarded
+      } catch (err) {
+        // If the vault is temporarily unwritable, re-queue entries for retry.
+        // Prepend so relative order is preserved across flush attempts.
+        this.buffer = entries.concat(this.buffer);
+        if (this.buffer.length > MAX_BUFFER_ENTRIES) {
+          const dropped = this.buffer.length - MAX_BUFFER_ENTRIES;
+          this.buffer = this.buffer.slice(-MAX_BUFFER_ENTRIES);
+          warnEvery(
+            "stream.buffer_overflow",
+            `[STREAM] Live stream backlog overflow (dropped ${dropped} entries). Vault may be unwritable.`,
+            60_000,
+          );
+        }
+        warnEvery(
+          "stream.flush_failed",
+          `[STREAM] Failed to flush Live_Stream.md (will retry): ${err instanceof Error ? err.message : String(err)}`,
+          60_000,
+        );
       } finally {
         this.flushing = false;
       }
