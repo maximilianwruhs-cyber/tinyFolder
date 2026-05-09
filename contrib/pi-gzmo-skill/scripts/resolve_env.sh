@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# Source this file only (do not execute). Loads VAULT_PATH from .env.
-# Order: $GZMO_ENV_FILE → existing $VAULT_PATH → walk from $PWD → walk from skill root.
-# When walking, prefers ./.env then ./gzmo-daemon/.env at each level.
+# resolve_env.sh — Source only (do not execute).
+# Loads `VAULT_PATH` from `.env` using this precedence:
+# - `$GZMO_ENV_FILE`
+# - existing `$VAULT_PATH`
+# - walk up from `$PWD`
+# - walk up from the skill root
+#
+# When walking, it prefers `./.env`, then `./gzmo-daemon/.env` at each level.
 set -euo pipefail
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

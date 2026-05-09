@@ -351,7 +351,9 @@ The daemon exposes a thin REST + SSE layer when enabled. Tasks submitted via HTT
 - **`GZMO_API_MAX_BODY_BYTES`**: hard cap on request body bytes (default: `1048576` = 1 MiB)
 - **`GZMO_API_MAX_TASK_CHARS`**: cap on `body` field length for `POST /api/v1/task` (default: `100000`)
 - **`GZMO_API_MAX_QUERY_CHARS`**: cap on `query` field length for `POST /api/v1/search` (default: `10000`)
-- **`GZMO_VRAM_USED_MB`**, **`GZMO_VRAM_TOTAL_MB`**: optional VRAM telemetry surfaced on `/api/v1/health` and the Pi `/gzmo` dashboard
+- **`GZMO_VRAM_PROBE`**: `auto|off|nvidia-smi` — VRAM telemetry source (default: `auto`). In `auto`, the daemon uses `nvidia-smi` when available, otherwise it disables the live probe.
+- **`GZMO_VRAM_PROBE_INTERVAL_MS`**: integer — polling interval for the live VRAM probe (default: `10000`)
+- **`GZMO_VRAM_USED_MB`**, **`GZMO_VRAM_TOTAL_MB`**: optional VRAM telemetry **fallback** surfaced on `/api/v1/health` and the Pi `/gzmo` dashboard. The live probe (when enabled + available) takes precedence.
 
 ### Operational hardening (optional)
 
@@ -402,9 +404,9 @@ Benchmark harness: see [Proof / smoke / eval commands](#proof--smoke--eval-comma
 
 ## Run (foreground)
 
-In one terminal, start Ollama.
+In one terminal, start Ollama (see [Prerequisites](#prerequisites)).
 
-In another terminal:
+In another terminal, run:
 
 ```bash
 cd gzmo-daemon
@@ -467,11 +469,7 @@ This is the smallest task that verifies the entire pipeline:
 - LLM inference runs
 - the daemon appends output and marks completion
 
-Create this exact file:
-
-- Path: `"$VAULT_PATH/GZMO/Inbox/000_golden_minimal_task.md"`
-
-Contents:
+Create `"$VAULT_PATH/GZMO/Inbox/000_golden_minimal_task.md"` with:
 
 ```yaml
 ---
@@ -644,7 +642,7 @@ To restore: stop the daemon (`systemctl --user stop gzmo-daemon` or Ctrl+C), `rm
 
 If Ollama can’t be reached, the daemon keeps the heartbeat alive but disables inference/embeddings-dependent subsystems until you restart with Ollama available.
 
-Quick checks:
+Quick check:
 
 ```bash
 curl -sS "http://localhost:11434/api/tags" | head

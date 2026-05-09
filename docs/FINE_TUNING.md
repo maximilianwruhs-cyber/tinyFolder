@@ -88,7 +88,7 @@ PARAMETER top_p 0.85
 PARAMETER num_ctx 8192
 ```
 
-Build and run:
+Run:
 
 ```bash
 ollama create gzmo-core -f Modelfile
@@ -232,7 +232,7 @@ tokenizer.save_pretrained("lora_model")
 print("LoRA adapter saved to ./lora_model")
 ```
 
-Run training:
+Run:
 
 ```bash
 python train_lora.py
@@ -263,7 +263,7 @@ model.save_pretrained_gguf(
 )
 ```
 
-This produces:
+Produces:
 ```
 model_gguf/
 └── unsloth.Q4_K_M.gguf
@@ -301,7 +301,7 @@ ollama create gzmo-lora-v1 -f Modelfile
 ollama run gzmo-lora-v1
 ```
 
-Set as daemon model and restart:
+Set in `gzmo-daemon/.env` and restart:
 ```bash
 # gzmo-daemon/.env
 OLLAMA_MODEL="gzmo-lora-v1"

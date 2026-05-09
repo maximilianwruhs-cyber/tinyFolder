@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Idempotent bootstrap for a fresh Ubuntu machine.
-# - Creates vault scaffold (Inbox contract dirs)
-# - Creates gzmo-daemon/.env (if missing) from provided VAULT_PATH + optional Ollama settings
-# - Installs Bun deps (bun install)
-# - Optionally installs systemd user unit (./install_service.sh)
-# - Optionally installs Pi skill pack into ~/.pi/skills/gzmo-daemon
+# agentic-setup.sh — Idempotent bootstrap for automation/CI.
+#
+# Performs:
+# - Create the vault scaffold.
+# - Write `gzmo-daemon/.env` (or overwrite with `--force-env`).
+# - Run `bun install` in `gzmo-daemon/` when Bun is available.
+# - Optional: install the systemd user unit (`./install_service.sh`).
+# - Optional: install the Pi skill pack into `~/.pi/skills/gzmo-daemon`.
 #
 # Usage:
 #   ./scripts/agentic-setup.sh --vault /abs/path/to/vault

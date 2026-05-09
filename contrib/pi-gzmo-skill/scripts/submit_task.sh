@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Submit a task to GZMO Inbox. Usage:
+# submit_task.sh — Write a task file into `GZMO/Inbox/`.
+#
+# Usage:
 #   ./submit_task.sh think "task body"
 #   ./submit_task.sh search "task body"
-#   ./submit_task.sh chain step2.md "task body"   # chain_next filename in GZMO/Subtasks/
+#   ./submit_task.sh chain step2.md "task body"   # `chain_next` filename in `GZMO/Subtasks/`
 
 set -euo pipefail
 

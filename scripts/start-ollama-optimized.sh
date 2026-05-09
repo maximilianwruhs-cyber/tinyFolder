@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 #
-# start-ollama-optimized.sh — Launch Ollama with KV-cache q8_0 + flash attention.
+# start-ollama-optimized.sh — Start Ollama with a smaller KV cache.
 #
-# Halves the KV-cache footprint and reduces memory pressure further with flash
-# attention. Keep models loaded indefinitely with KEEP_ALIVE=-1 so the daemon
-# never pays a cold-start cost.
+# Uses `q8_0` KV cache and enables flash attention by default. Keeps models
+# loaded with `OLLAMA_KEEP_ALIVE=-1` to avoid cold starts.
 #
 # Usage:
 #   ./scripts/start-ollama-optimized.sh                # default: ollama serve

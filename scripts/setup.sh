@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# setup.sh — thin entry point for the two happy paths (no merged mega-installer).
+# setup.sh — Route to setup flows (human/agent/doctor).
 #
 #   human  → install-local-stack.sh, then onboard.sh (interactive TTY, else --auto)
 #   agent  → agentic-setup.sh (pass-through args)

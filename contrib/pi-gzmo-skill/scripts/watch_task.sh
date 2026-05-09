@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Poll task file until status is completed or failed; print file. Optional timeout.
-# Usage: ./watch_task.sh <path-to-task.md> [max_seconds]
+# watch_task.sh — Poll a task file until `completed` or `failed`.
+#
+# Usage:
+#   ./watch_task.sh <path-to-task.md> [max_seconds]
 
 set -euo pipefail
 
