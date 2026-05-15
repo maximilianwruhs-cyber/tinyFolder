@@ -24,7 +24,7 @@
     "@types/papaparse": "5.5.2",
     "@types/yauzl": "2.10.3",
     "fflate": "0.8.2",
-    "typescript": "^5.0.0"
+    "typescript": "^6.0.3"
   },
   "peerDependencies": {
     "typescript": "^5"
