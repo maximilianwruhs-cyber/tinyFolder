@@ -7,6 +7,7 @@
  *   full     — everything (art project)
  *   minimal  — core without embeddings sync
  *   heartbeat— watcher + task processing off, pulse only
+ *   interactive — core + GAH/DSJ/teachback enabled by default (clarification-first)
  *
  * Usage (foreground):
  *   GZMO_PROFILE=core bun run index.ts
@@ -37,6 +38,8 @@ import { TaskSemaphore, readTaskConcurrency } from "./src/task_semaphore";
 import { sweepOldTraces } from "./src/reasoning_trace";
 import { startVramProbe, stopVramProbe } from "./src/vram_probe";
 import { loadConfig } from "./src/config";
+import { writeBootReport } from "./src/boot_report";
+import { ensureDropzoneScaffold, resolveDropzoneRoot } from "./src/dropzone_paths";
 
 // Rate-limited warnings so a persistent disk/permission error doesn't spam logs.
 const _warnedAt = new Map<string, number>();
@@ -57,6 +60,7 @@ const config = loadConfig();
 const VAULT_PATH = config.vaultPath;
 const INBOX_PATH = config.inboxPath;
 const OLLAMA_API_URL = config.ollamaUrl;
+const DROPZONE_ROOT = resolveDropzoneRoot(VAULT_PATH);
 
 // ── Runtime profile (safe mode) ────────────────────────────
 const runtime = resolveRuntimeProfile();
@@ -67,24 +71,29 @@ for (const dir of [
   INBOX_PATH,
   join(VAULT_PATH, "GZMO", "Subtasks"),
   join(VAULT_PATH, "GZMO", "Thought_Cabinet"),
-  join(VAULT_PATH, "GZMO", "Dropzone"),
-  join(VAULT_PATH, "GZMO", "Dropzone", "_tmp"),
+  join(VAULT_PATH, "GZMO", "Issues"),
+  join(VAULT_PATH, "GZMO", "Reviews"),
+  join(VAULT_PATH, "GZMO", "Reports"),
   join(VAULT_PATH, "wiki", "incoming"),
 ]) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
+ensureDropzoneScaffold(DROPZONE_ROOT);
 
 // ── Boot ───────────────────────────────────────────────────
 console.log("═══════════════════════════════════════════════");
 console.log("  GZMO Daemon v0.3.0 — Smart Core");
 console.log("  ⚡ Chaos Engine + Allostasis + Vault RAG");
 console.log("═══════════════════════════════════════════════");
-console.log(`  Vault:  ${VAULT_PATH}`);
-console.log(`  Inbox:  ${INBOX_PATH}`);
+console.log(`  Vault:    ${VAULT_PATH}`);
+console.log(`  Inbox:    ${INBOX_PATH}`);
+console.log(`  Dropzone: ${DROPZONE_ROOT}`);
 console.log(`  Model:  ${config.ollamaModel}`);
 console.log(`  Ollama: ${OLLAMA_API_URL}`);
 console.log(`  Profile:${describeRuntimeProfile(runtime)}`);
 console.log("═══════════════════════════════════════════════");
+
+void writeBootReport(VAULT_PATH, { profile: config.profile }).catch(() => {});
 
 // Defaults for the "max finesse" retrieval stack (can be overridden by env).
 process.env.GZMO_MULTIQUERY ??= "on";

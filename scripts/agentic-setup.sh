@@ -16,15 +16,19 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/dgx-spark.sh
+source "$REPO_ROOT/scripts/lib/dgx-spark.sh"
 DAEMON_DIR="$REPO_ROOT/gzmo-daemon"
 ENV_FILE="$DAEMON_DIR/.env"
 
 vault_path=""
+dropzone_dir=""
 ollama_url="http://localhost:11434"
 ollama_model="hermes3:8b"
 with_systemd=0
 with_pi=0
 force_env=0
+desktop_dropzone=1
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -41,6 +45,14 @@ while [[ $# -gt 0 ]]; do
     --ollama-model)
       shift
       ollama_model="${1:-}"
+      ;;
+    --dropzone-dir)
+      shift
+      dropzone_dir="${1:-}"
+      desktop_dropzone=0
+      ;;
+    --no-desktop-dropzone)
+      desktop_dropzone=0
       ;;
     --with-systemd)
       with_systemd=1
@@ -70,7 +82,6 @@ echo "agentic-setup: vault=$vault_path" >&2
 
 echo "agentic-setup: creating vault scaffold…" >&2
 mkdir -p "$vault_path/GZMO/Inbox"
-mkdir -p "$vault_path/GZMO/Dropzone"
 mkdir -p "$vault_path/GZMO/Subtasks"
 mkdir -p "$vault_path/GZMO/Thought_Cabinet"
 mkdir -p "$vault_path/GZMO/Quarantine"
@@ -78,22 +89,46 @@ mkdir -p "$vault_path/GZMO/Reasoning_Traces"
 mkdir -p "$vault_path/wiki"
 mkdir -p "$vault_path/wiki/incoming"
 
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "agentic-setup: writing $ENV_FILE" >&2
+if [[ -z "$dropzone_dir" && "$desktop_dropzone" -eq 1 ]]; then
+  dropzone_dir="$(default_desktop_dropzone_dir)"
+fi
+
+if detect_dgx_spark; then
+  echo "agentic-setup: DGX Spark detected — pulling Qwen 3.6 MoE default" >&2
+  ollama_model="$(pull_spark_default_model)"
+  ollama pull nomic-embed-text || true
+fi
+if [[ -n "$dropzone_dir" ]]; then
+  [[ "$dropzone_dir" == /* ]] || die "GZMO_DROPZONE_DIR must be absolute (got: $dropzone_dir)"
+  mkdir -p "$dropzone_dir"/{_processed,_failed,files,_tmp}
+  echo "agentic-setup: dropzone=$dropzone_dir" >&2
+fi
+
+write_env_file() {
   cat > "$ENV_FILE" <<EOF
 VAULT_PATH="$vault_path"
 OLLAMA_URL="$ollama_url"
 OLLAMA_MODEL="$ollama_model"
+GZMO_PROFILE="core"
 EOF
+  if [[ -n "$dropzone_dir" ]]; then
+    printf 'GZMO_DROPZONE_DIR="%s"\n' "$dropzone_dir" >> "$ENV_FILE"
+  fi
+  if detect_dgx_spark; then
+    echo "" >> "$ENV_FILE"
+    echo "# DGX Spark — document / Dropzone RAG (see README)" >> "$ENV_FILE"
+    spark_gzmo_env_lines >> "$ENV_FILE"
+  fi
+}
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "agentic-setup: writing $ENV_FILE" >&2
+  write_env_file
 else
   existing_vault="$(grep -E '^VAULT_PATH=' "$ENV_FILE" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\"' || true)"
   if (( force_env == 1 )); then
     echo "agentic-setup: overwriting $ENV_FILE (--force-env)" >&2
-    cat > "$ENV_FILE" <<EOF
-VAULT_PATH="$vault_path"
-OLLAMA_URL="$ollama_url"
-OLLAMA_MODEL="$ollama_model"
-EOF
+    write_env_file
   else
     echo "agentic-setup: keeping existing $ENV_FILE (edit manually if needed)" >&2
     if [[ -n "${existing_vault:-}" && "$existing_vault" != "$vault_path" ]]; then
@@ -125,5 +160,11 @@ if (( with_pi == 1 )); then
   echo "agentic-setup: set in your shell: export GZMO_ENV_FILE=\"$ENV_FILE\"" >&2
 fi
 
-echo "agentic-setup: done" >&2
+if [[ -x "$REPO_ROOT/scripts/spark-self-check.sh" ]]; then
+  export GZMO_ENV_FILE="$ENV_FILE"
+  echo "agentic-setup: spark self-check → GZMO/SELF_HELP.md …" >&2
+  "$REPO_ROOT/scripts/spark-self-check.sh" --write-vault || true
+fi
+
+echo "agentic-setup: done (see \$VAULT_PATH/GZMO/SELF_HELP.md when present)" >&2
 

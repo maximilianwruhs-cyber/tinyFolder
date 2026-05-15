@@ -17,6 +17,8 @@ export interface PipelineContext {
   vaultContext: string;
   systemPrompt: string;
   deterministicAnswer?: string;
+  /** If set, engine should markUnbound() instead of inferring. */
+  haltReason?: string;
   state: Record<string, any>;
 }
 

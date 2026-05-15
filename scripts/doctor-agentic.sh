@@ -148,6 +148,22 @@ else
   (cd "$DAEMON_DIR" && bun "${doc[@]}") || ok=0
 fi
 
+# Spark / Ollama self-help → $VAULT_PATH/GZMO/SELF_HELP.md (agents read this first when stuck)
+if [[ -x "$REPO_ROOT/scripts/spark-self-check.sh" ]]; then
+  spark_args=(--write-vault)
+  if (( heal == 1 )); then
+    spark_args+=(--heal)
+  fi
+  say "Running: ./scripts/spark-self-check.sh ${spark_args[*]}"
+  if ! "$REPO_ROOT/scripts/spark-self-check.sh" "${spark_args[@]}"; then
+    sc=$?
+    if (( sc > 1 )); then
+      ok=0
+    fi
+    actions+=("Read \$VAULT_PATH/GZMO/SELF_HELP.md or docs/TROUBLESHOOTING_SPARK.md; re-run: ./scripts/spark-self-check.sh --heal --write-vault")
+  fi
+fi
+
 say ""
 if (( ok == 1 )) && (( fixed_any == 0 )); then
   say "OK"

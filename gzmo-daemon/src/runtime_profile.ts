@@ -1,4 +1,4 @@
-export type GzmoProfileName = "heartbeat" | "minimal" | "standard" | "core" | "full";
+export type GzmoProfileName = "heartbeat" | "minimal" | "standard" | "core" | "full" | "interactive";
 
 export interface RuntimeProfile {
   name: GzmoProfileName;
@@ -32,6 +32,7 @@ function parseProfileName(raw?: string): GzmoProfileName {
   if (v === "heartbeat") return "heartbeat";
   if (v === "minimal") return "minimal";
   if (v === "standard") return "standard";
+  if (v === "interactive") return "interactive";
   return "full";
 }
 
@@ -100,6 +101,9 @@ export function defaultRuntimeProfile(name: GzmoProfileName): RuntimeProfile {
         enablePruning: false,
         enableDashboardPulse: false,
       };
+
+    case "interactive":
+      return defaultRuntimeProfile("core");
 
     case "full":
       return {

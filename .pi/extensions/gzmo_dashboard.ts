@@ -54,6 +54,7 @@ export async function updateUiStatus(ctx: ExtensionContext): Promise<void> {
     const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
     let pending = 0;
     let processing = 0;
+    let unbound = 0;
     if (await fileExists(inboxDir)) {
       const entries = await fsp.readdir(inboxDir);
       for (const e of entries) {
@@ -63,6 +64,7 @@ export async function updateUiStatus(ctx: ExtensionContext): Promise<void> {
           const s = await readTaskStatus(p);
           if (s === "pending") pending++;
           if (s === "processing") processing++;
+          if (s === "unbound") unbound++;
         } catch {
           // ignore unreadable tasks
         }
@@ -74,9 +76,11 @@ export async function updateUiStatus(ctx: ExtensionContext): Promise<void> {
     if (apiHealth.ok) {
       const vram = formatVramBar(apiHealth.data.vram_used_mb, apiHealth.data.vram_total_mb);
       const badge = `API ${apiHealth.data.status} ● ${apiHealth.data.model_loaded}`;
-      summary = `GZMO: ${pending}p/${processing}a ● ${badge}` + (vram ? ` ● ${vram}` : "");
+      const ub = unbound > 0 ? `/${unbound}u` : "";
+      summary = `GZMO: ${pending}p/${processing}a${ub} ● ${badge}` + (vram ? ` ● ${vram}` : "");
     } else {
-      summary = `GZMO: ${pending}p/${processing}a ● API offline`;
+      const ub = unbound > 0 ? `/${unbound}u` : "";
+      summary = `GZMO: ${pending}p/${processing}a${ub} ● API offline`;
     }
     ctx.ui.setStatus("gzmo", summary);
 
@@ -193,7 +197,13 @@ export class GzmoDashboardComponent {
       for (const t of this.state.tasks) {
         const st = t.status ?? "?";
         const col =
-          st === "completed" ? th.fg("success", st) : st === "failed" ? th.fg("error", st) : th.fg("muted", st);
+          st === "completed"
+            ? th.fg("success", st)
+            : st === "failed"
+              ? th.fg("error", st)
+              : st === "unbound"
+                ? th.fg("warning", st)
+                : th.fg("muted", st);
         const base = path.basename(t.path);
         lines.push(truncateToWidth(`  ${col} ${th.fg("dim", String(t.action ?? "?"))}  ${base}`, width));
       }

@@ -1,6 +1,13 @@
 ## tinyFolder
 
-GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `search` / `chain`). Checklist and contract: [`AGENTS.md`](AGENTS.md).
+GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `search` / `chain`). Files land in a **vault**; users drop documents on the **Desktop Dropzone**; the local LLM answers with **`[E#]` evidence** from ingested notes.
+
+| Machine | Inference model | Profile | Config template |
+|---------|-----------------|---------|-----------------|
+| Laptop / small GPU | `hermes3:8b` (wizard default) | `core` | [`gzmo-daemon/.env.example`](gzmo-daemon/.env.example) |
+| **NVIDIA DGX Spark** (128 GB) | `qwen3.6:35b-a3b-nvfp4` | `core` | [`gzmo-daemon/.env.spark.example`](gzmo-daemon/.env.spark.example) |
+
+Agent checklist: [`AGENTS.md`](AGENTS.md).
 
 ---
 
@@ -8,6 +15,7 @@ GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `searc
 
 - [First 5 minutes (copy/paste checklist)](#first-5-minutes-copypaste-checklist)
 - [Which installer? (human vs agent)](#which-installer-human-vs-agent)
+- [Bigger machine (DGX Spark)](#bigger-machine-dgx-spark--64gb-ram--quick-path)
 - [Fresh machine agentic bootstrap](#fresh-machine-agentic-bootstrap-recommended)
 - [Doctor (agentic readiness)](#doctor-agentic-readiness)
 - [Mental model](#mental-model)
@@ -23,6 +31,7 @@ GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `searc
 - [Proof / smoke / eval commands](#proof--smoke--eval-commands)
 - [Backup & restore](#backup--restore)
 - [Troubleshooting](#troubleshooting)
+- [Troubleshooting (DGX Spark)](docs/TROUBLESHOOTING_SPARK.md)
 - [Fine-tuning (advanced)](#fine-tuning-advanced)
 - [Repo contents (what is public)](#repo-contents-what-is-public)
 - [Additional documentation](#additional-documentation)
@@ -35,10 +44,11 @@ GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `searc
 
 Goal: get from zero to a verified end-to-end loop (**Inbox → claim → append output**) with the smallest possible surface area.
 
-1) Start Ollama:
+1) Start Ollama (laptops: plain `ollama serve`; **DGX Spark**: use optimized script — sets **256k** context when appropriate):
 
 ```bash
-OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_FLASH_ATTENTION=1 OLLAMA_KEEP_ALIVE=-1 ollama serve
+./scripts/start-ollama-optimized.sh
+# or: OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_FLASH_ATTENTION=1 OLLAMA_KEEP_ALIVE=-1 ollama serve
 ```
 
 2) Install deps:
@@ -55,7 +65,7 @@ bun install
 # Or interactive: ./scripts/onboard.sh
 ```
 
-The wizard supports everything from CPU-only laptops up to the **NVIDIA DGX Spark** (128GB unified memory). On a DGX Spark it will auto-select a 70B–72B-class model (e.g. `qwen2.5:72b` or `llama3.3:70b`).
+The wizard supports everything from CPU-only laptops up to the **NVIDIA DGX Spark** (128GB unified memory). On Spark-class hardware it auto-selects **`qwen3.6:35b-a3b-nvfp4`** (Blackwell FP4) when available, else **`qwen3.6:35b-a3b`** or **`qwen3:32b`** — matching [NVIDIA’s DGX Spark playbook](https://build.nvidia.com/spark/cli-coding-agent).
 
 Or get **stack + wizard** in one command (Bun/Ollama/models, then onboard): `./scripts/setup.sh human` — see [Which installer?](#which-installer-human-vs-agent).
 
@@ -105,6 +115,122 @@ The repo ships **small scripts** plus one **thin router** — nothing is merged 
 | **Agent / automation / “just give me a vault”** | `./scripts/setup.sh agent --vault /abs/path` | [`agentic-setup.sh`](scripts/agentic-setup.sh) — minimal `.env`, scaffold, `bun install`; optional `--force-env`, `--with-systemd`, `--with-pi`. |
 | **Health pass** | `./scripts/setup.sh doctor` | [`doctor-agentic.sh`](scripts/doctor-agentic.sh) (same flags as calling it directly). |
 
+### Bigger machine (DGX Spark / 64GB+ RAM) — quick path
+
+For a fresh powerful box (e.g. **NVIDIA DGX Spark**), prefer **core** first: inbox, embeddings, Dropzone ingest, and search with `[E#]` citations — without turning on clarification gates until you need them.
+
+```bash
+cd /path/to/tinyFolder
+# Agent/Cursor bootstrap: vault anywhere, Dropzone on Desktop/Schreibtisch by default
+./scripts/setup.sh agent --vault /home/you/GZMO-vault --force-env --with-systemd
+# Or human flow + wizard (Spark → qwen3.6 nvfp4):
+./scripts/setup.sh human --auto-wizard
+
+cd gzmo-daemon
+bun install
+ollama pull nomic-embed-text
+ollama pull "$(grep '^OLLAMA_MODEL=' .env | cut -d= -f2- | tr -d '"')"
+# Spark default if wizard not run yet:
+# ollama pull qwen3.6:35b-a3b-nvfp4 || ollama pull qwen3.6:35b-a3b
+bun run doctor
+cd .. && ./install_service.sh && systemctl --user daemon-reload && systemctl --user enable --now gzmo-daemon
+```
+
+**Dropzone on Desktop:** set `GZMO_DROPZONE_DIR` to an absolute folder such as `~/Schreibtisch/GZMO-Dropzone` (or `~/Desktop/GZMO-Dropzone`). The vault (`VAULT_PATH`) can live elsewhere; wiki notes and embeddings still live under the vault. `agentic-setup.sh` creates the desktop folder and writes `GZMO_DROPZONE_DIR` unless you pass `--no-desktop-dropzone`.
+
+**“Smooth” bill/doc test:** drop a fake invoice (PDF or `.md`) into the desktop Dropzone → daemon converts/stores under `wiki/incoming/` → auto follow-up **search** task → answer must quote amounts/lines with **`[E#]`** evidence tags from that page. Use `GZMO_PROFILE=core`; enable `GZMO_ENABLE_GAH` / `GZMO_ENABLE_DSJ` / `interactive` only when you want the LLM to halt for clarification.
+
+### Maximizing context on DGX Spark (128 GB unified memory)
+
+Context is **not one knob**. Ollama’s KV cache (how much the model *can* remember) and GZMO’s retrieval/evidence budget (how much vault text is *injected* per task) are separate. On Spark you can max out the **Ollama** side without stress; **GZMO** still needs the evidence/output knobs for bill-quality answers.
+
+#### Memory budget (re-evaluated for `qwen3.6:35b-a3b-nvfp4`)
+
+| Component | Typical size | Notes |
+|-----------|--------------|--------|
+| **Total pool** | **128 GB** | CPU+GPU unified on GB10 — not “GPU-only” VRAM |
+| OS + desktop + buffers | 6–10 GB | Leave this headroom; don’t plan to 128.0 GB flat |
+| **Model weights (nvfp4)** | **~22 GB** | [Ollama tag](https://ollama.com/library/qwen3.6:35b-a3b-nvfp4); vs **~70 GB** BF16 — do **not** use BF16 if you want long context on one box |
+| **KV cache (q8_0)** at **262144** ctx | **~5–6 GB** | MoE arch: 40 layers × **2** KV heads × 128 dim ([config](https://huggingface.co/Qwen/Qwen3.6-35B-A3B)); formula ≈ `ctx × 20 KiB/token` at q8_0 |
+| KV at **131072** (128k) | **~2.6 GB** | Half of 256k |
+| KV at **65536** (64k) | **~1.3 GB** | Ollama’s minimum for “agents/RAG” class workloads |
+| Inference scratch (MoE, 3B active) | 2–4 GB | Much smaller than dense 70B |
+| `nomic-embed-text` (if loaded) | **&lt;0.5 GB** | Optional second model; use `OLLAMA_MAX_LOADED_MODELS=2` only when needed |
+
+**Estimated total (recommended stack):**
+
+```
+128 GB
+ − 8 GB   OS / desktop
+ − 22 GB  qwen3.6:35b-a3b-nvfp4 weights
+ −  6 GB  KV @ 262144 + flash-attn / allocator headroom
+ −  3 GB  runtime scratch
+ ≈ 89 GB  FREE (single-user, one chat model loaded)
+```
+
+Community vLLM measurements on the same hardware report **~80+ GB available for KV** after NVFP4 weights ([DGX Spark Qwen guide](https://github.com/adadrag/qwen3.5-dgx-spark)) — consistent with the formula above (256k native needs only ~5 GB KV, not 80 GB; the rest is unused capacity you *could* use for concurrency or a second model).
+
+**Do not compare to dense 72B on Spark:**
+
+| Model | Weights | KV @ 128k (q8, approx.) | Fits 128 GB with 256k ctx? |
+|-------|---------|-------------------------|----------------------------|
+| `qwen3.6:35b-a3b-nvfp4` | ~22 GB | ~2.6 GB | **Yes — easily** |
+| `qwen2.5:72b` Q4 | ~48 GB | ~24 GB | Tight; little room for embed + OS |
+| `qwen3.6:35b-a3b` BF16 | ~70 GB | ~5 GB+ | **Poor** — KV headroom collapses |
+
+#### Recommended `OLLAMA_CONTEXT_LENGTH` on Spark
+
+| Setting | When | Why |
+|---------|------|-----|
+| **262144** (256k) | **Default for Spark** — use this | Native max for Qwen 3.6; only ~5–6 GB KV; **~85–90 GB** still free with nvfp4 |
+| 131072 (128k) | Debugging slowness on huge single prompts | Still plenty of headroom; halves KV |
+| 65536 (64k) | Ollama doc floor for agents/RAG | Only if you need to free RAM for **second** large model |
+| &gt;262144 | Not recommended | Beyond trained context; quality may drift (vLLM allows override; Ollama caps at model limit) |
+
+Ollama already picks **256k** default when it sees ≥48 GiB ([context-length docs](https://docs.ollama.com/context-length)). `start-ollama-optimized.sh` sets **`OLLAMA_CONTEXT_LENGTH=262144`** on Spark when unset.
+
+**Start Ollama (Spark):**
+
+```bash
+OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_FLASH_ATTENTION=1 OLLAMA_KEEP_ALIVE=-1 \
+  OLLAMA_CONTEXT_LENGTH=262144 \
+  ./scripts/start-ollama-optimized.sh
+```
+
+**Verify on the real machine** (ground truth beats formulas):
+
+```bash
+ollama run qwen3.6:35b-a3b-nvfp4 "ping"
+ollama ps
+```
+
+You want **`CONTEXT` ≈ 262144** and **`PROCESSOR` = 100% GPU**. The **`SIZE`** column is total resident memory for that model+context slot — expect roughly **28–35 GB** for nvfp4 @ 256k (not 128 GB). If `SIZE` &gt; 50 GB or CPU appears in `PROCESSOR`, lower context or confirm you are on **nvfp4**, not BF16.
+
+#### GZMO knobs (still required for “good results” on bills)
+
+Max Ollama context does **not** auto-inject full invoices. Raise retrieval/output separately:
+
+| Layer | Spark-oriented target |
+|--------|------------------------|
+| `GZMO_TOPK` | **12** |
+| `GZMO_EVIDENCE_MAX_SNIPPETS` | **16** |
+| `GZMO_EVIDENCE_MAX_CHARS` | **2400** |
+| `GZMO_LLM_MAX_TOKENS` | **2048** |
+
+```bash
+# gzmo-daemon/.env
+GZMO_TOPK=12
+GZMO_EVIDENCE_MAX_SNIPPETS=16
+GZMO_EVIDENCE_MAX_CHARS=2400
+GZMO_LLM_MAX_TOKENS=2048
+```
+
+**Thinking mode:** Qwen 3.6 can spend huge internal token budgets in thinking mode — disable for short factual bill Q&A (`/no_think` or non-thinking template) so context is not wasted on hidden reasoning.
+
+**Concurrency:** Each extra parallel chat multiplies KV. GZMO Inbox is mostly **one task at a time** — 256k single-user is safe; a company-wide multi-user server is a different sizing problem.
+
+Golden task: [Golden minimal task](#golden-minimal-task-end-to-end-verification).
+
 Useful variants:
 
 ```bash
@@ -129,14 +255,15 @@ If you want this to be **repeatable** on a brand-new Ubuntu box (or a wiped dev 
 Prereqs you still must install yourself:
 
 - **Bun**
-- **Ollama** (+ pull `hermes3:8b` and `nomic-embed-text` if you use embeddings)
+- **Ollama** — pull models for your hardware (`hermes3:8b` + `nomic-embed-text` on laptops; **DGX Spark**: wizard or agent bootstrap pulls **`qwen3.6:35b-a3b-nvfp4`**)
 
-Bootstrap (vault scaffold + `.env` + bun deps):
+Bootstrap (vault scaffold + `.env` + bun deps; on Spark also sets **desktop Dropzone** + document RAG knobs):
 
 ```bash
 VAULT="/absolute/path/to/your/vault"
-./scripts/setup.sh agent --vault "$VAULT" --force-env
+./scripts/setup.sh agent --vault "$VAULT" --force-env --with-systemd
 # equivalent: ./scripts/agentic-setup.sh --vault "$VAULT" --force-env
+# Spark reference .env: cp gzmo-daemon/.env.spark.example gzmo-daemon/.env
 ```
 
 Optional: also generate the **systemd user unit**:
@@ -188,7 +315,7 @@ Notes:
 
 - **Input**: Markdown task files in `VAULT_PATH/GZMO/Inbox/*.md`
 - **Routing**: YAML frontmatter key `action` chooses behavior
-- **Lifecycle**: `status: pending → processing → completed | failed`
+- **Lifecycle**: `status: pending → processing → completed | failed | unbound`
 - **Output**: results are appended to the **same file** (and additional artifacts are written under `VAULT_PATH/GZMO/`)
 
 ### Evidence-first search contract
@@ -210,23 +337,29 @@ This project is maintained for **Ubuntu Linux** (and similar distros with **syst
 
 ### Recommended models
 
-The default is **`hermes3:8b`** — excellent tool-use and reasoning for its size.
+**Laptop / dev default:** `hermes3:8b` + `nomic-embed-text`.
 
-On high-end hardware the setup wizard will suggest bigger models:
+**DGX Spark (128 GB unified):** [NVIDIA’s playbook](https://build.nvidia.com/spark/cli-coding-agent) — **`qwen3.6:35b-a3b-nvfp4`** (~22 GB weights, **256k** context with headroom). Avoid dense **70B–72B** models here; they waste memory without better document RAG for this use case.
 
-| Hardware | Suggested model | VRAM / RAM needed |
-|---|---|---|
-| CPU-only laptop | `phi3:mini` or `qwen2.5:0.5b` | 4–6 GB RAM |
-| 4–8 GB VRAM GPU | `hermes3:8b` or `qwen2.5:7b` | 4–8 GB VRAM |
-| 16–24 GB VRAM GPU | `qwq:32b` or `deepseek-r1:14b` | 16–24 GB VRAM |
-| 48–80 GB VRAM GPU | `llama3.1:70b` or `deepseek-r1:32b` | 48–64 GB VRAM |
-| **NVIDIA DGX Spark** (128 GB unified) | `qwen2.5:72b` or `llama3.3:70b` | ~48–64 GB |
+| Hardware | Chat model | Embeddings | Notes |
+|---|---|---|---|
+| CPU-only laptop | `phi3:mini` or `qwen2.5:0.5b` | `nomic-embed-text` | Wizard auto-picks |
+| 4–8 GB VRAM | `hermes3:8b` or `qwen2.5:7b` | `nomic-embed-text` | |
+| 16–24 GB VRAM | `qwen3:32b` or `deepseek-r1:14b` | `nomic-embed-text` | |
+| 48–80 GB VRAM | `qwen3:32b` | `nomic-embed-text` or `qwen3-embedding:4b` | Prefer Qwen3 over legacy 70B |
+| **DGX Spark** | **`qwen3.6:35b-a3b-nvfp4`** | `nomic-embed-text` (optional **`qwen3-embedding:4b`**) | See [`.env.spark.example`](gzmo-daemon/.env.spark.example) |
 
-Pull the default set:
+Pull sets:
 
 ```bash
+# Laptop
 ollama pull hermes3:8b
 ollama pull nomic-embed-text
+
+# DGX Spark
+ollama pull qwen3.6:35b-a3b-nvfp4
+ollama pull nomic-embed-text
+# optional: ollama pull qwen3-embedding:4b
 ```
 
 Start Ollama (foreground):
@@ -284,14 +417,19 @@ The daemon reads environment variables. For local usage, the simplest is a file:
 ### Required configuration
 
 - **`VAULT_PATH`**: absolute path to your vault directory.
+- **`GZMO_DROPZONE_DIR`** (optional): absolute path to the physical Dropzone folder. Default: `$VAULT_PATH/GZMO/Dropzone`. Use e.g. `~/Schreibtisch/GZMO-Dropzone` so drag-and-drop works from the desktop while the vault lives elsewhere.
 
-Example `gzmo-daemon/.env`:
+Example `gzmo-daemon/.env` (laptop):
 
 ```bash
 VAULT_PATH="/absolute/path/to/your/vault"
 OLLAMA_URL="http://localhost:11434"
 OLLAMA_MODEL="hermes3:8b"
+GZMO_PROFILE="core"
+GZMO_EMBED_MODEL="nomic-embed-text"
 ```
+
+**DGX Spark:** copy [`gzmo-daemon/.env.spark.example`](gzmo-daemon/.env.spark.example) → `.env` (includes `GZMO_DROPZONE_DIR`, document RAG knobs, `qwen3.6:35b-a3b-nvfp4`).
 
 ### Clean boot (systemd helper env)
 
@@ -314,6 +452,10 @@ The daemon sets these defaults at boot (and you can override them):
 - **`GZMO_RERANK_LLM`**: `on|off` — rerank retrieved chunks (default: `on`)
 - **`GZMO_ANCHOR_PRIOR`**: `on|off` — boosts canonical “anchor” chunks (default: `on`)
 - **`GZMO_MIN_RETRIEVAL_SCORE`**: float string — fail-closed retrieval threshold (default: `0.32`)
+- **`GZMO_TOPK`**: int — hybrid retrieval hits per search (default: `6`, max `20`)
+- **`GZMO_EVIDENCE_MAX_SNIPPETS`**: int — max `[E#]` snippets in the evidence packet (default: `10`)
+- **`GZMO_EVIDENCE_MAX_CHARS`**: int — max characters per snippet (default: `900`, max `4000`)
+- **`GZMO_LLM_MAX_TOKENS`**: int — caps model *output* length per task; overrides chaos pulse when set (default: pulse-derived `400`–`800`, clamp `128`–`8192`)
 
 ### Safety / verification knobs
 
@@ -340,7 +482,8 @@ Most subsystems can be disabled (all accept `true/false/1/0`):
 - `GZMO_ENABLE_WIKI_LINT`
 - `GZMO_ENABLE_PRUNING`
 - `GZMO_ENABLE_DASHBOARD_PULSE`
-- `GZMO_ENABLE_DROPZONE` — watch `GZMO/Dropzone/` for loose files (default: `on` when the inbox watcher runs)
+- `GZMO_ENABLE_DROPZONE` — watch the Dropzone folder for loose files (default: `on` when the inbox watcher runs)
+- `GZMO_DROPZONE_DIR` — absolute path override for Dropzone (default: `$VAULT_PATH/GZMO/Dropzone`)
 
 **Dropzone conversion** (local-only; no network in the convert path):
 
@@ -413,10 +556,29 @@ Structured traces, filesystem tools, Tree-of-Thought search, and cross-task clai
 - **`GZMO_ENABLE_CRITIQUE`**: `on|off` — on total ToT failure, run a critique pass and optionally one replan wave (default: `off`)
 - **`GZMO_ENABLE_MODEL_ROUTING`**: `on|off` — route ToT LLM calls by role (`fast` / `reason` / `judge`) (default: `off`)
 - **`GZMO_FAST_MODEL`**, **`GZMO_REASON_MODEL`**, **`GZMO_JUDGE_MODEL`**, **`GZMO_RERANK_MODEL`**: Ollama model tags when routing is on (each falls back to `OLLAMA_MODEL` when unset)
-- **`GZMO_EMBED_MODEL`**: embedding model tag (default: `nomic-embed-text`)
+- **`GZMO_EMBED_MODEL`**: embedding model tag used by `embeddings.ts` and doctor (default: `nomic-embed-text`; Spark may use `qwen3-embedding:4b` after `ollama pull`)
 - **`GZMO_ENABLE_TOOL_CHAINING`**: `on|off` — allow follow-up `vault_read` / `dir_list` calls inferred from prior tool output, still capped by `GZMO_MAX_TOOL_CALLS` (default: `off`)
 - **`GZMO_ENABLE_KNOWLEDGE_GRAPH`**: `on|off` — update the on-vault Knowledge Graph on task completion (default: `off`)
 - **`GZMO_KG_SEARCH_AUGMENT`**: `on|off` — augment vault retrieval using Knowledge Graph-connected sources (default: `off`)
+
+### Clarification-first (optional; `GZMO_PROFILE=interactive` enables GAH/DSJ/teachback by default)
+
+- **`GZMO_ENABLE_GAH`**: `on|off` — halt search when evidence is empty/weak before LLM inference (default: `off`)
+- **`GZMO_GAH_MIN_SCORE`**: float — GAH threshold; falls back to `GZMO_MIN_RETRIEVAL_SCORE` when unset
+- **`GZMO_ENABLE_DSJ`**: `on|off` — shadow-judge rewrite loop after generation (default: `off`)
+- **`GZMO_DSJ_THRESHOLD`**: float — minimum judge score 0.0–1.0 (default: `0.5`)
+- **`GZMO_ENABLE_TEACHBACK`**: `on|off` — pre-inference vagueness check for search (default: `off`)
+- **`GZMO_ENABLE_THINK_CLARIFY`**: `on|off` — halt think tasks that reference missing vault paths or empty retrieval (default: `off`)
+- **`GZMO_ENABLE_PDU`**: `on|off` — umpire synthesis when DSJ rewrite fails (default: `off`)
+- **`GZMO_ENABLE_SEMANTIC_NOISE`**: `on|off` — halt when answer drifts from query intent (default: `off`)
+- **`GZMO_SEMANTIC_NOISE_MAX`**: float — noise budget (default: `1.0`)
+- **`GZMO_TRIPARTITE_PROMPTS`**: `on|off` — Task/Context/Coordination prompt layers (default: `off`)
+- **`GZMO_TOT_HALT_UNBOUND`**: `on|off` — ToT analyze gate failure → `unbound` instead of fail-closed answer (default: `off`; requires `GZMO_ENABLE_GATES`)
+- **`GZMO_ISSUES_MIRROR`**: `on|off` — copy unbound tasks to `GZMO/Issues/` (default: `off`)
+- **`GZMO_ENABLE_TRUST_LEDGER`**: `on|off` — per-vault trust score modulates DSJ threshold (default: `off`)
+- **`GZMO_ENABLE_STRATEGY_REVIEWS`**: `on|off` — write human-visible `GZMO/Reviews/review_*.md` (default: `off`)
+- **`GZMO_ENABLE_KG_COLLISION`**: `on|off` — halt on KG constraint/contradiction hits (requires `GZMO_ENABLE_KNOWLEDGE_GRAPH`, default: `off`)
+- **`GZMO_ENABLE_BOOT_REPORT`**: `on|off` — write `GZMO/Reports/boot_report_*.md` at startup (default: `on`)
 
 View a trace (from `gzmo-daemon/` with `VAULT_PATH` set): `bun run trace:view -- <trace_id_or_task_file>` — add `--thinking` to print stored model thinking snippets.
 
@@ -487,7 +649,7 @@ systemctl --user restart gzmo-daemon
 
 ### Dropzone (loose files)
 
-When the daemon runs with the inbox watcher enabled (so not in `heartbeat` / `GZMO_ENABLE_INBOX_WATCHER=0`) and `GZMO_ENABLE_DROPZONE` is not turned off, it watches **`$VAULT_PATH/GZMO/Dropzone/`** recursively (any nesting under the drop root). Only the daemon’s own subtrees at the **root** of Dropzone (`_processed/`, `_failed/`, `files/`, `_tmp/`) and dotfile paths are ignored, so a nested folder named `files/` inside a customer bundle is still ingested.
+When the inbox watcher is enabled (so not in `heartbeat` / `GZMO_ENABLE_INBOX_WATCHER=0`) and `GZMO_ENABLE_DROPZONE` is not turned off, it watches the **Dropzone root** recursively: **`$GZMO_DROPZONE_DIR`** if set, otherwise **`$VAULT_PATH/GZMO/Dropzone/`** (any nesting under that root). Only the daemon’s own subtrees at the **root** of Dropzone (`_processed/`, `_failed/`, `files/`, `_tmp/`) and dotfile paths are ignored, so a nested folder named `files/` inside a customer bundle is still ingested.
 
 - A **pending GZMO task** `.md` (`status: pending` and `action: think|search|chain`) is **moved into** `GZMO/Inbox/`.
 - Any other **Markdown** file is copied into **`wiki/incoming/`**, embedded when the store is available, then an **`action: search` follow-up task** is created so retrieval can cite the new page.
@@ -525,6 +687,25 @@ What “pass” looks like (deterministic checks):
 If it fails:
 - If status becomes `failed`, inspect daemon logs (foreground terminal or `journalctl --user -u gzmo-daemon -f`).
 - If the file stays `pending`, the watcher is not seeing the inbox (almost always `VAULT_PATH` wrong, or permissions).
+
+### Clarification halt (`status: unbound`)
+
+When **Gate-as-Halt (GAH)** or the **Dialectical Shadow Judge (DSJ)** cannot proceed confidently, the daemon may set `status: unbound` and append a `## ⏸️ GZMO Needs Clarification` block instead of hallucinating an answer.
+
+**Resume:** edit the task body, address the questions, then change `status: unbound` → `status: pending` and save. The inbox watcher re-dispatches on `change`.
+
+| Env var | Default | Role |
+|---------|---------|------|
+| `GZMO_ENABLE_GAH` | off | Halt search when vault evidence is empty/weak (`GZMO_GAH_MIN_SCORE`, falls back to `GZMO_MIN_RETRIEVAL_SCORE`) |
+| `GZMO_ENABLE_DSJ` | off | Post-generation judge + optional rewrite (`GZMO_DSJ_THRESHOLD`) |
+| `GZMO_ENABLE_TEACHBACK` | off | Pre-inference vagueness check (search) |
+| `GZMO_ENABLE_PDU` | off | Full Prosecutor–Defender–Umpire synthesis when DSJ rewrite fails |
+| `GZMO_ENABLE_SEMANTIC_NOISE` | off | Halt when response drifts from query intent |
+| `GZMO_TRIPARTITE_PROMPTS` | off | Layer system prompts as Task/Context/Coordination |
+| `GZMO_ISSUES_MIRROR` | off | Copy unbound tasks to `GZMO/Issues/` for triage |
+| `GZMO_PROFILE=interactive` | — | Enables GAH + DSJ + teachback by default (explicit env overrides win) |
+
+For stronger DSJ critique, set `GZMO_ENABLE_MODEL_ROUTING=on` and configure a dedicated judge model.
 
 ### Task file format
 
@@ -592,6 +773,7 @@ All operational artifacts live under:
 
 High-signal files (examples; depends on enabled subsystems):
 
+- `GZMO/SELF_HELP.md` — **machine-generated fix list** (Ollama, models, Dropzone, RAG knobs); refresh with `./scripts/spark-self-check.sh --write-vault` or on daemon boot
 - `GZMO/health.md` — human-readable health snapshot
 - `GZMO/TELEMETRY.json` — structured ops telemetry snapshot
 - `GZMO/OPS_OUTPUTS.json` — machine-readable outputs registry generated from code
@@ -676,6 +858,8 @@ To restore: stop the daemon (`systemctl --user stop gzmo-daemon` or Ctrl+C), `rm
 
 ## Troubleshooting
 
+**DGX Spark (128 GB):** see **[`docs/TROUBLESHOOTING_SPARK.md`](docs/TROUBLESHOOTING_SPARK.md)** for a full failure → fix table with links to NVIDIA, Ollama, and GitHub issues (empty thinking output, nvfp4 gibberish, embeddings 404, UMA memory, bill citation knobs).
+
 ### Ollama unreachable
 
 If Ollama can’t be reached, the daemon keeps the heartbeat alive but disables inference/embeddings-dependent subsystems until you restart with Ollama available.
@@ -721,7 +905,7 @@ Ollama runs fine-tuned models but does not train them. For customizing GZMO's in
 
 Quick overview of what's covered:
 - **Tier 1:** System prompt tuning (5 min, zero GPU)
-- **Tier 2:** LoRA fine-tuning with Unsloth (2–4 hrs, DGX Spark can train 70B LoRA)
+- **Tier 2:** LoRA fine-tuning with Unsloth (DGX Spark can train 70B Q-LoRA; inference default remains **Qwen 3.6 MoE** — see [docs/FINE_TUNING.md](docs/FINE_TUNING.md))
 - **Tier 3:** Full fine-tuning + custom embedding models
 - Importing Safetensors, GGUF, and adapters into Ollama
 - GZMO-specific Modelfile templates
@@ -732,7 +916,7 @@ For ToT / latency methodology (benchmark harness), see [`docs/PERFORMANCE_BASELI
 
 ## Repo contents (what is public)
 
-`gzmo-daemon/`, `scripts/` (includes [`setup.sh`](scripts/setup.sh) — see [Which installer?](#which-installer-human-vs-agent); other helpers include `boot-stack.sh`, `doctor-agentic.sh`, `push_learning_to_green.sh`, `start-ollama-optimized.sh`), `install_service.sh`, `README.md`, `AGENTS.md`, `LICENSE`, `.gitignore`, [`.gitattributes`](.gitattributes), [`.editorconfig`](.editorconfig), [`docs/`](docs/) (see [Additional documentation](#additional-documentation)), [`.pi/extensions/`](.pi/extensions/) (Pi extension + bundled `gzmo-daemon` skill; JS deps in [`package.json`](.pi/extensions/package.json) and lockfile **`bun.lock`** — run `bun install` in that directory when developing the extension), [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md) (optional shell/CI inbox helpers). Vault data stays local and is not in git.
+`gzmo-daemon/` (includes [`.env.example`](gzmo-daemon/.env.example), [`.env.spark.example`](gzmo-daemon/.env.spark.example)), `scripts/` (includes [`setup.sh`](scripts/setup.sh) — see [Which installer?](#which-installer-human-vs-agent); other helpers include `boot-stack.sh`, `doctor-agentic.sh`, `push_learning_to_green.sh`, `start-ollama-optimized.sh`), `install_service.sh`, `README.md`, `AGENTS.md`, `LICENSE`, `.gitignore`, [`.gitattributes`](.gitattributes), [`.editorconfig`](.editorconfig), [`docs/`](docs/) (see [Additional documentation](#additional-documentation)), [`.pi/extensions/`](.pi/extensions/) (Pi extension + bundled `gzmo-daemon` skill; JS deps in [`package.json`](.pi/extensions/package.json) and lockfile **`bun.lock`** — run `bun install` in that directory when developing the extension), [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md) (optional shell/CI inbox helpers). Vault data stays local and is not in git.
 
 ---
 
@@ -740,6 +924,10 @@ For ToT / latency methodology (benchmark harness), see [`docs/PERFORMANCE_BASELI
 
 | Document | Purpose |
 |----------|---------|
+| [`gzmo-daemon/.env.spark.example`](gzmo-daemon/.env.spark.example) | **DGX Spark** reference `.env` (Qwen 3.6, Dropzone, RAG knobs) |
+| [`gzmo-daemon/.env.example`](gzmo-daemon/.env.example) | Laptop / generic `.env` template |
+| [`scripts/lib/dgx-spark.sh`](scripts/lib/dgx-spark.sh) | Shared Spark detection + env snippets for installers |
+| [`docs/TROUBLESHOOTING_SPARK.md`](docs/TROUBLESHOOTING_SPARK.md) | **DGX Spark** failure → fix matrix (Ollama, Qwen 3.6, GZMO, links) |
 | [`docs/FINE_TUNING.md`](docs/FINE_TUNING.md) | Inference quality: prompts, LoRA, Modelfiles, Ollama import |
 | [`docs/PERFORMANCE_BASELINE.md`](docs/PERFORMANCE_BASELINE.md) | ToT / latency benchmark methodology (`bun run benchmark`) |
 

@@ -11,9 +11,13 @@
 
 import matter from "./yaml_frontmatter";
 import { write } from "bun";
-import { lstat } from "fs/promises";
+import { copyFile, lstat, mkdir } from "fs/promises";
+import { dirname, join } from "path";
+import { readBoolEnv } from "./pipelines/helpers";
 
-export type TaskStatus = "pending" | "processing" | "completed" | "failed" | "cancelled";
+export type TaskStatus = "pending" | "processing" | "completed" | "failed" | "cancelled" | "unbound";
+
+const CLARIFICATION_HEADER = "## ⏸️ GZMO Needs Clarification";
 
 export interface TaskFrontmatter {
   status: TaskStatus;
@@ -97,15 +101,60 @@ export class TaskDocument {
   }
 
   /**
+   * Halt execution — awaiting user clarification. User edits the file and sets
+   * `status: pending`; the watcher's `change` handler re-dispatches.
+   */
+  async markUnbound(clarification: string, opts?: { haltReason?: string; issueType?: string }): Promise<void> {
+    this.frontmatter.status = "unbound";
+    this.frontmatter.unbound_at = new Date().toISOString();
+    if (opts?.haltReason) this.frontmatter.halt_reason = opts.haltReason;
+    if (opts?.issueType) this.frontmatter.type = opts.issueType;
+
+    const block = [
+      "\n---\n",
+      CLARIFICATION_HEADER,
+      clarification.trim(),
+      "",
+      "> To resume: edit this file, address the questions above,",
+      "> then change `status: unbound` → `status: pending` and save.",
+    ].join("\n");
+
+    const headerIdx = this.body.indexOf(CLARIFICATION_HEADER);
+    if (headerIdx >= 0) {
+      this.body = this.body.slice(0, headerIdx).trimEnd() + "\n" + block;
+    } else {
+      this.body = this.body.trimEnd() + "\n" + block;
+    }
+    await this.save();
+
+    if (readBoolEnv("GZMO_ISSUES_MIRROR", false)) {
+      try {
+        const vaultRoot = this.filePath.split(/[\\\/]GZMO[\\\/]/)[0];
+        if (vaultRoot) {
+          const issuesDir = join(vaultRoot, "GZMO", "Issues");
+          await mkdir(issuesDir, { recursive: true });
+          const base = this.filePath.split(/[\\\/]/).pop() ?? "issue.md";
+          await copyFile(this.filePath, join(issuesDir, base));
+        }
+      } catch {
+        // Non-fatal mirror for human triage
+      }
+    }
+  }
+
+  /**
    * Reset a task that was left in `processing` after an unclean shutdown back
    * to `pending`, clearing `started_at` and recording when the recovery ran.
    * Used by boot-time recovery; the watcher's initial scan will then redispatch.
+   * Leaves `unbound` tasks alone — they await user input.
    */
   async markPendingRecovered(now: Date = new Date()): Promise<void> {
-    this.frontmatter.status = "pending";
-    delete this.frontmatter.started_at;
-    this.frontmatter.recovered_at = now.toISOString();
-    await this.save();
+    if (this.frontmatter.status === "processing") {
+      this.frontmatter.status = "pending";
+      delete this.frontmatter.started_at;
+      this.frontmatter.recovered_at = now.toISOString();
+      await this.save();
+    }
   }
 
   private async save(): Promise<void> {

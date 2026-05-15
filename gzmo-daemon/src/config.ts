@@ -2,7 +2,7 @@ import { mkdirSync } from "fs";
 import { accessSync, constants as fsConstants, writeFileSync, unlinkSync } from "fs";
 import { isAbsolute, join, resolve } from "path";
 
-export type GzmoProfile = "core" | "standard" | "full" | "minimal" | "heartbeat";
+export type GzmoProfile = "core" | "standard" | "full" | "minimal" | "heartbeat" | "interactive";
 
 export interface DaemonConfig {
   vaultPath: string;
@@ -24,14 +24,26 @@ function readProfile(): GzmoProfile {
     raw === "standard" ||
     raw === "full" ||
     raw === "minimal" ||
-    raw === "heartbeat"
+    raw === "heartbeat" ||
+    raw === "interactive"
   ) {
     return raw;
   }
   throw new Error(
     `Invalid GZMO_PROFILE=${JSON.stringify(process.env.GZMO_PROFILE)}. ` +
-      `Expected one of: core, standard, full, minimal, heartbeat.`,
+      `Expected one of: core, standard, full, minimal, heartbeat, interactive.`,
   );
+}
+
+/** Enable clarification-first flags when profile=interactive (explicit env wins). */
+export function applyInteractiveProfileDefaults(): void {
+  if ((process.env.GZMO_PROFILE ?? "").trim().toLowerCase() !== "interactive") return;
+  const setDefault = (key: string, value: string) => {
+    if (process.env[key] === undefined) process.env[key] = value;
+  };
+  setDefault("GZMO_ENABLE_GAH", "on");
+  setDefault("GZMO_ENABLE_DSJ", "on");
+  setDefault("GZMO_ENABLE_TEACHBACK", "on");
 }
 
 function ensureWritableDir(absDir: string): void {
@@ -64,6 +76,8 @@ function assertVaultWritable(vaultPath: string): void {
  * Throws on misconfiguration (intended: crash fast on bad local setup).
  */
 export function loadConfig(): DaemonConfig {
+  applyInteractiveProfileDefaults();
+
   const vaultPath = process.env.VAULT_PATH
     ? resolve(process.env.VAULT_PATH)
     : resolve(import.meta.dir, "../../vault");

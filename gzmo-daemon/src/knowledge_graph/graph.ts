@@ -324,6 +324,45 @@ export class KnowledgeGraph {
     return [...this.edges.values()].find((e) => e.from === from && e.to === to && e.type === type);
   }
 
+  findNodesByLabelMatch(normalized: string): KgNode[] {
+    const n = normalized.toLowerCase().trim();
+    if (!n) return [];
+    return [...this.nodes.values()].filter((node) => {
+      const label = node.label.toLowerCase();
+      return label === n || label.includes(n) || n.includes(label);
+    });
+  }
+
+  /** ACP Step 2 — constraints and contradict edges for prompt entities. */
+  queryCollisions(entityLabel: string): Array<{
+    entity: string;
+    constraint?: string;
+    edgeType?: string;
+    evidence?: string;
+  }> {
+    const out: Array<{ entity: string; constraint?: string; edgeType?: string; evidence?: string }> = [];
+    for (const node of this.findNodesByLabelMatch(entityLabel)) {
+      const meta = node.metadata ?? {};
+      const c = meta.constraint;
+      if (typeof c === "string" && c.trim()) {
+        out.push({ entity: entityLabel, constraint: c.trim() });
+      }
+      if (meta.unresolvable === true || meta.unresolvable === "true") {
+        out.push({ entity: entityLabel, constraint: "Marked unresolvable in knowledge graph" });
+      }
+      for (const edge of this.getEdgesForNode(node.id)) {
+        if (edge.type === "contradicts") {
+          out.push({
+            entity: entityLabel,
+            edgeType: "contradicts",
+            evidence: edge.evidence,
+          });
+        }
+      }
+    }
+    return out;
+  }
+
   // ── Semantic auto-linking ────────────────────────────────────
 
   /**

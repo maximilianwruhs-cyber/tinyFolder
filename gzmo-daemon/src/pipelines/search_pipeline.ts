@@ -10,6 +10,7 @@ import { formatSearchCitations } from "../citation_formatter";
 import { verifySafety } from "../verifier_safety";
 import { selfEvalAndRewrite } from "../self_eval";
 import { buildSystemPrompt, readBoolEnv, readIntEnv, isProofTask, extractExplicitVaultMdPaths } from "./helpers";
+import { buildGahClarification, shouldEvidenceGateHalt } from "../gah_gate";
 import { OUTPUTS_REGISTRY } from "../outputs_registry";
 import type { ToolCallRecord } from "../tools/types";
 
@@ -222,6 +223,30 @@ export class SearchPipeline implements TaskPipeline {
         ? Math.max(0, ...perPart.map((p) => p.results[0]?.score ?? 0))
         : 0;
       const bestTop = Math.max(results[0]?.score ?? 0, bestPartTop);
+
+      // Evidence Quality Gate (GAH): halt before LLM when evidence is empty/weak.
+      const gahEnabled = readBoolEnv("GZMO_ENABLE_GAH", false);
+      const gahMinRaw = process.env.GZMO_GAH_MIN_SCORE ?? process.env.GZMO_MIN_RETRIEVAL_SCORE ?? "0.25";
+      const gahMinScore = Number.parseFloat(gahMinRaw);
+      const hasToolEvidence = Boolean(toolFacts?.trim());
+      const evidenceEmpty = results.length === 0 && perPart.every((p) => p.results.length === 0);
+
+      const gah = shouldEvidenceGateHalt({
+        gahEnabled,
+        hasToolEvidence,
+        evidenceEmpty,
+        bestTop,
+        gahMinScore,
+      });
+      if (gah.halt && gah.reason) {
+        const systemPrompt = buildSystemPrompt(pulse?.snapshot(), undefined, memory?.toPromptContext(), undefined);
+        return {
+          vaultContext: "",
+          systemPrompt,
+          haltReason: buildGahClarification(gah.reason),
+          state: { evidencePacket: undefined, evidenceMulti: undefined, vaultContext: "" },
+        };
+      }
 
       const wantMulti = perPart.length > 0;
       if (wantMulti) {

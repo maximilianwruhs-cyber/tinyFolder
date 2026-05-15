@@ -131,7 +131,7 @@ async function attachApiSseListener(pi: ExtensionAPI, ctx: ExtensionContext, ses
   if (!h.ok) return;
 
   const close = client.connectSSE((ev) => {
-    if (ev.type !== "task_completed" && ev.type !== "task_failed") return;
+    if (ev.type !== "task_completed" && ev.type !== "task_failed" && ev.type !== "task_unbound") return;
     // Update footer status + dashboard FIRST so the UI reflects the new
     // counts/model/VRAM before the chat message render is queued.
     void updateUiStatus(ctx);
@@ -177,7 +177,7 @@ async function flushTerminalNotifications(pi: ExtensionAPI, ctx: ExtensionContex
   for (const p of [...notify]) {
     try {
       const st = await readTaskStatus(p);
-      if (st !== "completed" && st !== "failed") continue;
+      if (st !== "completed" && st !== "failed" && st !== "unbound") continue;
       notify.delete(p);
       const bn = path.basename(p);
       pi.sendMessage(
@@ -217,7 +217,7 @@ async function waitForTerminalTaskStatus(
   signal: AbortSignal | undefined,
   maxSec: number,
   pollSec: number,
-): Promise<"completed" | "failed"> {
+): Promise<"completed" | "failed" | "unbound"> {
   const started = Date.now();
   let lastStatus: string | null = null;
   let wakeEarly = false;
@@ -235,7 +235,7 @@ async function waitForTerminalTaskStatus(
       if (signal?.aborted) throw new Error("Aborted");
       const status = await readTaskStatus(taskPath);
       lastStatus = status;
-      if (status === "completed" || status === "failed") return status;
+      if (status === "completed" || status === "failed" || status === "unbound") return status;
       const delayMs = wakeEarly ? 0 : Math.max(1, pollSec) * 1000;
       wakeEarly = false;
       await new Promise((r) => setTimeout(r, delayMs));
@@ -245,7 +245,7 @@ async function waitForTerminalTaskStatus(
       watcher?.close();
     } catch { /* ignore */ }
   }
-  throw new Error(`Timeout after ${maxSec}s waiting for completed|failed (last status: ${lastStatus ?? "unknown"})`);
+  throw new Error(`Timeout after ${maxSec}s waiting for completed|failed|unbound (last status: ${lastStatus ?? "unknown"})`);
 }
 
 async function atomicWriteFile(filePath: string, content: string): Promise<void> {
@@ -400,6 +400,11 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
   pi.on("before_agent_start", async () => {
     try {
       const { vaultPath } = await resolveVaultPath();
+      const selfHelp = path.join(vaultPath, "GZMO", "SELF_HELP.md");
+      let selfHelpHint = "";
+      if (await fileExists(selfHelp)) {
+        selfHelpHint = ` On-box fixes: ${selfHelp}`;
+      }
       const inboxDir = path.join(vaultPath, "GZMO", "Inbox");
       let pending = 0;
       let processing = 0;
@@ -414,11 +419,20 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
           } catch { /* ignore */ }
         }
       }
-      if (pending === 0 && processing === 0) return undefined;
+      if (pending === 0 && processing === 0) {
+        if (!selfHelpHint) return undefined;
+        return {
+          message: {
+            customType: "gzmo-status",
+            content: `GZMO: read SELF_HELP.md for on-box diagnostics.${selfHelpHint}`,
+            display: false,
+          },
+        };
+      }
       return {
         message: {
           customType: "gzmo-status",
-          content: `GZMO Inbox: ${pending} pending, ${processing} processing.`,
+          content: `GZMO Inbox: ${pending} pending, ${processing} processing.${selfHelpHint}`,
           display: false,
         },
       };
@@ -481,6 +495,47 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
     },
   });
 
+  /* ── resume (unbound → pending) ── */
+
+  pi.registerTool({
+    name: "gzmo_resume_task",
+    label: "GZMO resume",
+    description:
+      "Resume an unbound task: strip the clarification block, optionally append a user note, set status: pending.",
+    promptSnippet: "Resume a halted GZMO task after the user clarified",
+    promptGuidelines: [
+      "Use gzmo_resume_task when status is unbound and the user has provided clarification.",
+      "Then use gzmo_watch_task to wait for completion.",
+    ],
+    parameters: Type.Object({
+      task_path: Type.String(),
+      note: Type.Optional(Type.String()),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: { task_path?: string; note?: string },
+    ): Promise<AgentToolResult<{ task_path: string; status: string }>> {
+      const taskPath = asNonEmptyString(params.task_path);
+      if (!taskPath) throw new Error("task_path is required");
+      let md = await fsp.readFile(taskPath, "utf8");
+      const header = "## ⏸️ GZMO Needs Clarification";
+      const idx = md.indexOf(header);
+      if (idx >= 0) {
+        const cut = md.lastIndexOf("\n---\n", idx);
+        md = (cut >= 0 ? md.slice(0, cut) : md.slice(0, idx)).trimEnd() + "\n";
+      }
+      if (params.note?.trim()) {
+        md = md.trimEnd() + `\n\n## User clarification\n${params.note.trim()}\n`;
+      }
+      md = md.replace(/(^|\n)status:\s*unbound\b/gi, "$1status: pending");
+      await atomicWriteFile(taskPath, md.endsWith("\n") ? md : md + "\n");
+      return {
+        content: [{ type: "text", text: `Resumed: ${taskPath}\nstatus: pending` }],
+        details: { task_path: taskPath, status: "pending" },
+      };
+    },
+  });
+
   /* ── read ── */
 
   pi.registerTool({
@@ -520,7 +575,8 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
     renderResult(result, { expanded }, theme, _ctx) {
       const d = result.details as { status?: string; tail?: string } | undefined;
       const st = d?.status ?? "?";
-      const stColor = st === "completed" ? "success" : st === "failed" ? "error" : "muted";
+      const stColor =
+        st === "completed" ? "success" : st === "failed" ? "error" : st === "unbound" ? "warning" : "muted";
       const tail = d?.tail ?? (result.content[0]?.type === "text" ? result.content[0].text : "");
       const preview = expanded ? tail : tail.split("\n").slice(0, 6).join("\n");
       return new Text(
@@ -537,11 +593,11 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
     name: "gzmo_watch_task",
     label: "GZMO watch",
     description:
-      "Wait until a task file reaches status completed or failed (or timeout). Uses filesystem watch for faster wake; still polls as a backstop.",
+      "Wait until a task file reaches status completed, failed, or unbound (or timeout). Uses filesystem watch for faster wake; still polls as a backstop.",
     promptSnippet: "Wait for a GZMO task to finish and return its result",
     promptGuidelines: [
       "Use gzmo_watch_task after gzmo_submit_task when you need the final output.",
-      "Blocks until the daemon marks the task completed or failed, or a timeout is reached.",
+      "Blocks until the daemon marks the task completed, failed, or unbound, or a timeout is reached.",
     ],
     parameters: WatchParams,
     async execute(
@@ -562,7 +618,7 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
       let tracking = false;
       try {
         const pre = await readTaskStatus(taskPath);
-        if (pre !== "completed" && pre !== "failed") {
+        if (pre !== "completed" && pre !== "failed" && pre !== "unbound") {
           notify.add(taskPath);
           tracking = true;
         }
@@ -590,6 +646,7 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
       const d = result.details as { final_status?: string } | undefined;
       const st = d?.final_status;
       if (st === "failed") return new Text(theme.fg("error", `❌ final_status: ${st}`), 0, 0);
+      if (st === "unbound") return new Text(theme.fg("warning", `⏸ final_status: ${st}`), 0, 0);
       if (st === "completed") return new Text(theme.fg("success", `✓ final_status: ${st}`), 0, 0);
       const t = result.content[0];
       const raw = t?.type === "text" ? t.text : "";
@@ -719,7 +776,8 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
       if (tasks.length === 0) return new Text(theme.fg("dim", "(no tasks)"), 0, 0);
       const lines = tasks.map((t) => {
         const st = t.status ?? "?";
-        const col = st === "completed" ? "success" : st === "failed" ? "error" : "muted";
+        const col =
+          st === "completed" ? "success" : st === "failed" ? "error" : st === "unbound" ? "warning" : "muted";
         return `${theme.fg(col, st)} ${theme.fg("dim", t.action ?? "?")}  ${path.basename(t.path)}`;
       });
       const cap = expanded ? lines : lines.slice(0, 8);
@@ -767,7 +825,8 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
       if (tasks.length === 0) return new Text(theme.fg("dim", "(no tasks)"), 0, 0);
       const lines = tasks.map((t) => {
         const st = t.status ?? "?";
-        const col = st === "completed" ? "success" : st === "failed" ? "error" : "muted";
+        const col =
+          st === "completed" ? "success" : st === "failed" ? "error" : st === "unbound" ? "warning" : "muted";
         return `${theme.fg(col, st)} ${theme.fg("dim", t.action ?? "?")}  ${path.basename(t.path)}`;
       });
       const cap = expanded ? lines : lines.slice(0, 8);
@@ -994,7 +1053,7 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
             const t = await client.getTask(sub.id);
             if (!t.ok) continue;
             const s = t.data.status;
-            if (s === "completed" || s === "failed") {
+            if (s === "completed" || s === "failed" || s === "unbound") {
               await updateUiStatus(ctx);
               const out = t.data.output ?? t.data.body ?? "(no output)";
               return {
@@ -1035,7 +1094,8 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
       if (isPartial) return new Text(theme.fg("warning", "💭 GZMO thinking…"), 0, 0);
       const d = result.details as { via?: string; status?: string; output?: string } | undefined;
       const st = d?.status ?? "?";
-      const stColor = st === "completed" ? "success" : st === "failed" ? "error" : "muted";
+      const stColor =
+        st === "completed" ? "success" : st === "failed" ? "error" : st === "unbound" ? "warning" : "muted";
       const out = d?.output ?? "";
       const preview = expanded ? out : out.split("\n").slice(0, 6).join("\n");
       return new Text(theme.fg(stColor, `[${d?.via ?? "?"}] status: ${st}`) + "\n" + theme.fg("dim", preview), 0, 0);

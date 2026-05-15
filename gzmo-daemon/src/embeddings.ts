@@ -1,7 +1,7 @@
 /**
  * embeddings.ts — Local Embedding Pipeline
  *
- * Embeds vault markdown files using nomic-embed-text via Ollama.
+ * Embeds vault markdown files via Ollama (`GZMO_EMBED_MODEL`, default nomic-embed-text).
  * SHA256 dedup prevents re-embedding unchanged content.
  * Debounced file watching for live vault sync.
  *
@@ -50,7 +50,9 @@ export interface EmbeddingStore {
 
 // ── Configuration ──────────────────────────────────────────────────
 
-const EMBED_MODEL = "nomic-embed-text";
+function embedModelName(): string {
+  return process.env.GZMO_EMBED_MODEL?.trim() || "nomic-embed-text";
+}
 const CHUNK_SIZE = 400;       // ~tokens (chars ÷ 4)
 const CHUNK_OVERLAP = 80;     // ~tokens overlap
 const MAX_CHUNK_CHARS = CHUNK_SIZE * 4;
@@ -68,7 +70,7 @@ const EMBED_FOLDERS = [
 // ── Core Functions ─────────────────────────────────────────────────
 
 /**
- * Embed a single text using Ollama's nomic-embed-text.
+ * Embed a single text using the configured Ollama embedding model.
  */
 async function embedText(
   text: string,
@@ -82,7 +84,7 @@ async function embedText(
     resp = await fetch(`${ollamaUrl}/api/embeddings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: EMBED_MODEL, prompt: text }),
+      body: JSON.stringify({ model: embedModelName(), prompt: text }),
       signal,
     });
   } catch (err: any) {
@@ -243,7 +245,7 @@ export async function syncEmbeddings(
   const { abs: storeAbs } = resolveVaultPath(vaultPath, storePath);
   // Load existing store
   let store: EmbeddingStore = {
-    modelName: EMBED_MODEL,
+    modelName: embedModelName(),
     chunks: [],
     lastFullScan: "",
     dirty: false,

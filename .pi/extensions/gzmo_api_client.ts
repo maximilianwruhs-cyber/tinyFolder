@@ -64,7 +64,7 @@ export type ApiSearchAccepted = {
 };
 
 export type ApiEventShape = {
-  type: "task_created" | "task_started" | "task_completed" | "task_failed" | "token" | "log";
+  type: "task_created" | "task_started" | "task_completed" | "task_failed" | "task_unbound" | "token" | "log";
   task_id?: string;
   data?: unknown;
   timestamp: string;
@@ -82,8 +82,8 @@ export async function waitForApiTaskTerminal(
   maxSec: number,
   pollSec: number,
   signal?: AbortSignal,
-): Promise<"completed" | "failed"> {
-  return await new Promise<"completed" | "failed">((resolve, reject) => {
+): Promise<"completed" | "failed" | "unbound"> {
+  return await new Promise<"completed" | "failed" | "unbound">((resolve, reject) => {
     let settled = false;
     let closeSse: (() => void) | null = null;
     let pollTimer: NodeJS.Timeout | null = null;
@@ -109,7 +109,7 @@ export async function waitForApiTaskTerminal(
       }
     };
 
-    const finish = (s: "completed" | "failed") => {
+    const finish = (s: "completed" | "failed" | "unbound") => {
       if (settled) return;
       settled = true;
       cleanup();
@@ -126,6 +126,7 @@ export async function waitForApiTaskTerminal(
     closeSse = client.connectSSE((ev) => {
       if (ev.task_id !== taskId) return;
       if (ev.type === "task_completed") finish("completed");
+      else if (ev.type === "task_unbound") finish("unbound");
       else if (ev.type === "task_failed") finish("failed");
     });
 
@@ -134,6 +135,7 @@ export async function waitForApiTaskTerminal(
         const t = await client.getTask(taskId, 3000);
         if (!t.ok) return;
         if (t.data.status === "completed") finish("completed");
+        else if (t.data.status === "unbound") finish("unbound");
         else if (t.data.status === "failed") finish("failed");
       })();
     }, Math.max(1, pollSec) * 1000);
@@ -251,7 +253,7 @@ export class GzmoApiClient {
     if (!sub.ok) return sub;
     const id = sub.data.id;
 
-    let terminal: "completed" | "failed";
+    let terminal: "completed" | "failed" | "unbound";
     try {
       terminal = await waitForApiTaskTerminal(this, id, maxSec, 2, signal);
     } catch (e: unknown) {
@@ -265,6 +267,13 @@ export class GzmoApiClient {
         ok: false,
         error: t.data.error ?? "Search task failed",
         status: 500,
+      };
+    }
+    if (terminal === "unbound") {
+      return {
+        ok: false,
+        error: t.data.error ?? "Search halted — clarification needed (status: unbound)",
+        status: 422,
       };
     }
 

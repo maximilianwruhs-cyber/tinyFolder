@@ -11,11 +11,11 @@
  *   1. POST /api/v1/search       → 202 Accepted { id, status, stream_url, task_url, path }
  *   2. GET  /api/v1/stream       → SSE connection (persistent, multi-task)
  *   3. Wait for: event: task_completed { task_id, data: { duration_ms } }
- *      (or task_failed for the same task_id)
+ *      (or task_failed / task_unbound for the same task_id)
  *   4. GET  /api/v1/task/:id     → 200 OK { status: "completed", output, evidence, body }
  *
  * Fallback when SSE is unavailable:
- *   Poll GET /api/v1/task/:id every N seconds until status ∈ {completed, failed}.
+ *   Poll GET /api/v1/task/:id every N seconds until status ∈ {completed, failed, unbound}.
  *
  * Legacy synchronous form (POST /api/v1/task with action="search") still works,
  * but it does not block: the response is also 202, and clients consume the
@@ -25,7 +25,7 @@
 
 export type ApiTaskAction = "think" | "search" | "chain";
 
-export type ApiTaskStatus = "pending" | "processing" | "completed" | "failed";
+export type ApiTaskStatus = "pending" | "processing" | "completed" | "failed" | "unbound";
 
 export interface ApiTaskRequest {
   /** Optional client-supplied ID. If omitted, the server mints a UUID. */
@@ -112,6 +112,7 @@ export type ApiEventType =
   | "task_started"
   | "task_completed"
   | "task_failed"
+  | "task_unbound"
   | "token"
   | "log";
 

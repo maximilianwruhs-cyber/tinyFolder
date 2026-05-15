@@ -1,5 +1,6 @@
 import type { ChaosSnapshot } from "../types";
 import { Phase } from "../types";
+import { wrapWithTripartiteLayers } from "./tripartite_identity";
 
 export type TaskAction = "think" | "search" | "chain";
 
@@ -122,7 +123,11 @@ export function buildSystemPrompt(
     parts.push(memoryContext);
   }
 
-  return parts.join("\n");
+  const joined = parts.join("\n");
+  if (readBoolEnv("GZMO_TRIPARTITE_PROMPTS", false)) {
+    return wrapWithTripartiteLayers(joined, "Complete the user task per the layers below.");
+  }
+  return joined;
 }
 
 export function shouldInjectProjectGrounding(action: TaskAction, body: string): boolean {

@@ -28,7 +28,10 @@ This skill is bundled with the `gzmo-tinyfolder` Pi extension when the extension
 ## Submit and follow
 
 1. `gzmo_submit_task({ action: "think" | "search" | "chain", body: "...", chain_next?: "..." })` — returns `task_path`.
-2. `gzmo_watch_task({ task_path })` — blocks until `completed` or `failed`, or timeout.
+2. `gzmo_watch_task({ task_path })` — blocks until `completed`, `failed`, or `unbound`, or timeout.
+3. If `unbound`, read the clarification block; use `gzmo_resume_task({ task_path, note })` then watch again.
+
+Optional env (default off): `GZMO_ENABLE_THINK_CLARIFY` halts think tasks that cite missing vault files.
 3. On success: summarize the excerpt from the tool result. On failure: use `gzmo_read_task` for the full file.
 
 When a task reaches a terminal state, the extension may also post a short **custom message** in chat (no extra tool call).

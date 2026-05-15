@@ -62,7 +62,8 @@ For Tier 2 and above:
 
 For DGX Spark (128GB unified memory):
 - All prerequisites above
-- Expect to use ~80–100GB of unified memory for 70B LoRA training
+- **Inference default (GZMO):** `qwen3.6:35b-a3b-nvfp4` + `OLLAMA_CONTEXT_LENGTH=262144` — see [README — DGX Spark](../README.md#bigger-machine-dgx-spark--64gb-ram--quick-path) and [`gzmo-daemon/.env.spark.example`](../gzmo-daemon/.env.spark.example)
+- **LoRA training:** expect ~80–100GB unified memory for 70B Q-LoRA (separate from day-to-day inference stack)
 
 ---
 
@@ -73,7 +74,8 @@ This is not "fine-tuning" in the ML sense, but it solves 80% of customization ne
 Create a `Modelfile`:
 
 ```dockerfile
-FROM qwen2.5:72b
+FROM qwen3.6:35b-a3b-nvfp4
+# Laptop / smaller box: FROM hermes3:8b
 
 SYSTEM """You are GZMO, a deterministic reasoning engine operating on a local vault.
 Rules:
@@ -437,9 +439,23 @@ PARAMETER num_ctx 8192
 
 ## DGX Spark specific notes
 
-### What the DGX Spark enables
+### Inference (GZMO day-to-day — preferred stack)
 
-With 128 GB unified memory, the DGX Spark sits in a unique position: it can train LoRA on 70B models locally, which normally requires cloud rental or multi-GPU workstations.
+| Item | Value |
+|------|--------|
+| Chat | `qwen3.6:35b-a3b-nvfp4` ([NVIDIA playbook](https://build.nvidia.com/spark/cli-coding-agent)) |
+| Context | `OLLAMA_CONTEXT_LENGTH=262144` via `./scripts/start-ollama-optimized.sh` |
+| Profile | `GZMO_PROFILE=core` |
+| Dropzone | `GZMO_DROPZONE_DIR=~/Schreibtisch/GZMO-Dropzone` (or `~/Desktop/...`) |
+| RAG knobs | `GZMO_TOPK=12`, `GZMO_EVIDENCE_MAX_SNIPPETS=16`, `GZMO_EVIDENCE_MAX_CHARS=2400`, `GZMO_LLM_MAX_TOKENS=2048` |
+
+Copy [`gzmo-daemon/.env.spark.example`](../gzmo-daemon/.env.spark.example). Legacy dense **qwen2.5:72b** / **llama3.3:70b** are not recommended for this repo’s document-ingest path on Spark.
+
+**Operational troubleshooting (failures, logs, nvfp4, thinking mode):** [`docs/TROUBLESHOOTING_SPARK.md`](TROUBLESHOOTING_SPARK.md).
+
+### What the DGX Spark enables (training)
+
+With 128 GB unified memory, the DGX Spark can also train LoRA on 70B-class models locally, which normally requires cloud rental or multi-GPU workstations.
 
 ### Training configurations
 
@@ -472,13 +488,14 @@ Expected memory: ~90–100GB during training. Remaining ~28GB handles OS + Ollam
 
 ### Recommended models for DGX Spark
 
-| Model | Training mode | Fits? |
-|-------|--------------|-------|
-| Llama 3.3 70B | Q-LoRA (r=128) | ✅ Yes |
-| Qwen 2.5 72B | Q-LoRA (r=128) | ✅ Yes |
+| Model | Use | Fits? |
+|-------|-----|-------|
+| **Qwen 3.6 35B-A3B nvfp4** | **GZMO inference (default)** | ✅ ~22 GB weights, 256k ctx |
+| Qwen 3.6 35B-A3B BF16 | Inference (not recommended) | ⚠️ ~70 GB weights — little KV headroom |
+| Llama 3.3 70B | Q-LoRA training (r=128) | ✅ Yes |
+| Qwen 2.5 72B | Q-LoRA training (legacy) | ✅ Yes — prefer Qwen 3.6 for inference |
 | Llama 3.1 405B | Any | ❌ No (~231GB at Q4) |
 | Mistral 7B | Full fine-tune | ✅ Yes (easy) |
-| Llama 3.1 8B | Full fine-tune | ✅ Yes |
 
 ---
 

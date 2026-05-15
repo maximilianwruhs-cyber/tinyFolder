@@ -39,12 +39,13 @@ describe("recoverStaleProcessing", () => {
     expect(r.skipped.length).toBe(0);
   });
 
-  test("ignores pending / completed / failed tasks", async () => {
+  test("ignores pending / completed / failed / unbound tasks", async () => {
     writeTask("a.md", { status: "pending" });
     writeTask("b.md", { status: "completed", completed_at: new Date().toISOString() });
     writeTask("c.md", { status: "failed", completed_at: new Date().toISOString() });
+    writeTask("d.md", { status: "unbound", unbound_at: new Date().toISOString() });
     const r = await recoverStaleProcessing(inbox);
-    expect(r.scanned).toBe(3);
+    expect(r.scanned).toBe(4);
     expect(r.recovered.length).toBe(0);
   });
 

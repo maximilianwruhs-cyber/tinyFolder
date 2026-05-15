@@ -9,7 +9,8 @@ import type { EmbeddingStore } from "../embeddings";
 import type { ChaosSnapshot } from "../types";
 import { budgetFromChaos, ToTController, type ToTNode } from "./controller";
 import { expandAnalyze, expandReason, expandRetrievalBranch } from "./expand";
-import { evaluateNode } from "./evaluate";
+import { evaluateNodeWithJudge } from "./evaluate";
+import { buildTotRetryHint } from "./tot_retry";
 import { getChatModel } from "../inference";
 import type { InferDetailedOptions } from "../inference";
 import { inferByRole, getChatModelForRole, modelRoutingEnabled } from "../inference_router";
@@ -21,9 +22,6 @@ import { searchVaultHybrid } from "../search";
 import { analyzeGate, retrieveGate, reasonGate } from "./gates";
 import { generateCritique } from "./critique";
 import { classifyTaskType, computeWinningPatterns, getRecentFailureContext, buildStrategyTips, formatStrategyContext, learningEnabled, loadLedger, type StrategyInjectContext } from "../learning/ledger";
-
-const RETRY_HINT =
-  "Your previous claims may have scored low on grounding. Re-examine the evidence; cite SOURCE IDs; prefer verbatim support.";
 
 export interface RunSearchTotParams {
   vaultRoot: string;
@@ -39,6 +37,8 @@ export interface RunSearchTotResult {
   answer: string;
   totFlatNodes: ReasoningNode[];
   strategyInjected?: boolean;
+  /** When set, engine should markUnbound instead of completing. */
+  haltReason?: string;
 }
 
 function isRetrievalNode(n: ToTNode): boolean {
@@ -219,6 +219,7 @@ export async function runSearchTot(p: RunSearchTotParams): Promise<RunSearchTotR
     }
 
     const firstPass: ToTNode[] = [];
+    let lastJudgeTrace = "";
 
     for (const vs of verifySpecs) {
       if (tot.totalNodes >= budget.maxTotalNodes) break;
@@ -236,8 +237,12 @@ export async function runSearchTot(p: RunSearchTotParams): Promise<RunSearchTotR
         retryGeneration: 0,
       });
 
-      verifyNode.score = await evaluateNode(verifyNode, judgeModel, p.body, evidenceCtx);
+      const judged = await evaluateNodeWithJudge(verifyNode, judgeModel, p.body, evidenceCtx);
+      verifyNode.score = judged.score;
       if (reasonGateFailed) verifyNode.score = Math.min(verifyNode.score ?? 0.5, 0.28);
+      if ((verifyNode.score ?? 0) < budget.evaluationThreshold && judged.trace) {
+        lastJudgeTrace = judged.trace;
+      }
       firstPass.push(verifyNode);
 
       if ((verifyNode.score ?? 0) >= budget.evaluationThreshold && beliefsEnabled() && verifyNode.claims) {
@@ -276,7 +281,7 @@ export async function runSearchTot(p: RunSearchTotParams): Promise<RunSearchTotR
         inferReason,
         temp,
         maxTok,
-        RETRY_HINT,
+        buildTotRetryHint(lastJudgeTrace),
       );
 
       for (const vs of verifySpecs.slice(0, 2)) {
@@ -295,7 +300,8 @@ export async function runSearchTot(p: RunSearchTotParams): Promise<RunSearchTotR
           retryGeneration: 1,
         });
 
-        retryVerify.score = await evaluateNode(retryVerify, judgeModel, p.body, evidenceCtx);
+        const retryJudged = await evaluateNodeWithJudge(retryVerify, judgeModel, p.body, evidenceCtx);
+        retryVerify.score = retryJudged.score;
 
         if ((retryVerify.score ?? 0) < budget.evaluationThreshold) {
           tot.prune(retryVerify);
@@ -396,6 +402,22 @@ export async function runSearchTot(p: RunSearchTotParams): Promise<RunSearchTotR
 
   const ok = await runAnalyzePhase(p.body, pastTraceContext);
   if (!ok) {
+    const totHaltUnbound = readBoolEnv("GZMO_TOT_HALT_UNBOUND", false);
+    if (totHaltUnbound && gatesEnabled) {
+      return {
+        answer: "",
+        totFlatNodes: tot.flattenForTrace(),
+        strategyInjected,
+        haltReason: [
+          "Tree-of-Thought analysis could not proceed past verification gates.",
+          "",
+          "**Suggestions:**",
+          "- Rephrase the query with clearer scope",
+          "- Add vault documents relevant to the question",
+          "- Disable ToT or gates if this halt is too aggressive",
+        ].join("\n"),
+      };
+    }
     const path = tot.bestPath();
     const bestClaims = path.flatMap((n) => n.claims ?? []);
     const evidenceFallback = path.find((n) => n.evidence_cited)?.evidence_cited ?? [];

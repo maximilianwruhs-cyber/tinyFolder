@@ -23,6 +23,12 @@ import {
 } from "./dropzone_convert";
 import { getDropzoneDedupConfig, mergeDropzoneIndexEntry, readDropzoneIndex, sha256Hex } from "./dropzone_dedup";
 import { getDropzoneZipConfig, pickConvertibleZipMember } from "./dropzone_zip";
+import {
+  dropzoneInnerFromAbs,
+  ensureDropzoneScaffold,
+  logicalDropzoneBinaryRel,
+  resolveDropzoneRoot,
+} from "./dropzone_paths";
 
 export function sanitizeDropzoneBaseName(name: string): string {
   const base = basename(name).replace(/\.[^.]+$/, "");
@@ -149,10 +155,9 @@ async function writeFollowUpSearchTask(
  */
 export async function handleDropzoneFile(absPath: string, deps: DropzoneWatcherDeps): Promise<void> {
   const { vaultPath, inboxPath, embeddings, log } = deps;
-  const relFromVault = relative(resolve(vaultPath), resolve(absPath)).replace(/\\/g, "/");
-  if (relFromVault.startsWith("..") || !relFromVault.startsWith("GZMO/Dropzone/")) return;
-
-  const inner = relFromVault.slice("GZMO/Dropzone/".length);
+  const dropRoot = resolveDropzoneRoot(vaultPath);
+  const inner = dropzoneInnerFromAbs(absPath, dropRoot);
+  if (!inner) return;
   if (isReservedInnerDropzonePath(inner) || dropzoneRelHasDotSegment(inner)) return;
 
   const bn = basename(absPath);
@@ -169,15 +174,13 @@ export async function handleDropzoneFile(absPath: string, deps: DropzoneWatcherD
     }
     if (!st.isFile() || st.isSymbolicLink()) return;
 
-    const dropRoot = join(vaultPath, "GZMO", "Dropzone");
     const processedDir = join(dropRoot, "_processed");
     const failedDir = join(dropRoot, "_failed");
     const filesDir = join(dropRoot, "files");
     const tmpDir = join(dropRoot, "_tmp");
     const wikiIncoming = join(vaultPath, "wiki", "incoming");
-    for (const d of [processedDir, failedDir, filesDir, tmpDir, wikiIncoming]) {
-      mkdirSync(d, { recursive: true });
-    }
+    ensureDropzoneScaffold(dropRoot);
+    mkdirSync(wikiIncoming, { recursive: true });
 
     const doc = await TaskDocument.load(absPath);
     if (doc && isPendingGzmoTask(doc)) {
@@ -249,7 +252,7 @@ export async function handleDropzoneFile(absPath: string, deps: DropzoneWatcherD
           const storedNameDup = `${isoCompact()}__${bn}`;
           const binDestDup = join(filesDir, storedNameDup);
           await moveAcrossDevices(absPath, binDestDup);
-          const relBinDup = relative(vaultPath, binDestDup).replace(/\\/g, "/");
+          const relBinDup = logicalDropzoneBinaryRel(basename(binDestDup));
           const stubSlugDup = wikiSlugFromDropzoneInner(inner, bn);
           const wikiNameDup = `${isoCompact()}__${stubSlugDup}.md`;
           const wikiAbsDup = join(wikiIncoming, wikiNameDup);
@@ -315,7 +318,7 @@ export async function handleDropzoneFile(absPath: string, deps: DropzoneWatcherD
     const storedName = `${isoCompact()}__${bn}`;
     const binDest = join(filesDir, storedName);
     await moveAcrossDevices(absPath, binDest);
-    const relBin = relative(vaultPath, binDest).replace(/\\/g, "/");
+    const relBin = logicalDropzoneBinaryRel(storedName);
     const stubSlug = wikiSlugFromDropzoneInner(inner, bn);
     const wikiName = `${isoCompact()}__${stubSlug}.md`;
     const wikiAbs = join(wikiIncoming, wikiName);
@@ -392,7 +395,7 @@ export async function handleDropzoneFile(absPath: string, deps: DropzoneWatcherD
     const msg = err instanceof Error ? err.message : String(err);
     log(`❌ Dropzone: failed on ${basename(absPath)} — ${msg}`);
     try {
-      const failedDir = join(vaultPath, "GZMO", "Dropzone", "_failed");
+      const failedDir = join(resolveDropzoneRoot(vaultPath), "_failed");
       if (!existsSync(failedDir)) mkdirSync(failedDir, { recursive: true });
       if (existsSync(absPath)) {
         const destFail = await uniqueDestPath(failedDir, basename(absPath));
@@ -407,8 +410,8 @@ export async function handleDropzoneFile(absPath: string, deps: DropzoneWatcherD
 }
 
 export function startDropzoneWatcher(deps: DropzoneWatcherDeps): FSWatcher {
-  const dropDir = join(deps.vaultPath, "GZMO", "Dropzone");
-  if (!existsSync(dropDir)) mkdirSync(dropDir, { recursive: true });
+  const dropDir = resolveDropzoneRoot(deps.vaultPath);
+  ensureDropzoneScaffold(dropDir);
 
   const dropDirAbs = resolve(dropDir);
   const w = watch(dropDir, {
@@ -475,7 +478,7 @@ async function scanDropzoneTree(dirAbs: string, dropRootAbs: string, deps: Dropz
 
 /** Process any files already sitting in Dropzone/ (e.g. left before a daemon restart). */
 export async function scanDropzoneOnBoot(deps: DropzoneWatcherDeps): Promise<void> {
-  const dropDir = join(deps.vaultPath, "GZMO", "Dropzone");
+  const dropDir = resolveDropzoneRoot(deps.vaultPath);
   if (!existsSync(dropDir)) return;
   await scanDropzoneTree(resolve(dropDir), resolve(dropDir), deps);
 }

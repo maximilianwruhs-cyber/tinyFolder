@@ -22,6 +22,11 @@ export interface TaskPerfEvent {
     partBackticksComplianceRate: number;
     partAdversarialRejectRate: number;
   };
+  dsj?: {
+    initial?: number;
+    rewrite?: number;
+    accepted?: boolean;
+  };
 }
 
 export async function appendTaskPerf(vaultPath: string, ev: TaskPerfEvent): Promise<void> {

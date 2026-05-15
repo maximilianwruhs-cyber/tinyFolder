@@ -4,6 +4,7 @@ import { gatherLocalFacts } from "../local_facts";
 import { buildProjectGrounding } from "../project_grounding";
 import { buildSystemPrompt, shouldInjectProjectGrounding, parseAction } from "./helpers";
 import { checkChainChecklist, enforceChainChecklist } from "../chain_enforce";
+import { checkThinkClarification } from "../think_clarification";
 
 export class ThinkPipeline implements TaskPipeline {
   async prepare(req: TaskRequest): Promise<PipelineContext> {
@@ -26,7 +27,21 @@ export class ThinkPipeline implements TaskPipeline {
     const snap = pulse?.snapshot();
     const memoryContext = memory?.toPromptContext();
     const systemPrompt = buildSystemPrompt(snap, undefined, memoryContext, projectGrounding);
-    
+
+    const thinkHalt = await checkThinkClarification({
+      vaultRoot,
+      body,
+      embeddingStore: req.embeddingStore,
+    });
+    if (thinkHalt) {
+      return {
+        vaultContext: "",
+        systemPrompt,
+        haltReason: thinkHalt,
+        state: { projectGrounding, projectAllowedPaths },
+      };
+    }
+
     return {
       vaultContext: "",
       systemPrompt,

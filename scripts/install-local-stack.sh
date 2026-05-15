@@ -22,6 +22,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib/dgx-spark.sh
+source "$REPO_ROOT/scripts/lib/dgx-spark.sh"
 VAULT="${1:-$HOME/vault}"
 PROFILE="${2:-core}"
 
@@ -121,6 +123,28 @@ case "$PROFILE" in
     ;;
 esac
 
+SPARK_MODE=0
+SPARK_DROPZONE=""
+if detect_dgx_spark && [[ "$PROFILE" != "minimal" ]]; then
+  SPARK_MODE=1
+  echo "       DGX Spark detected — using NVIDIA playbook default (Qwen 3.6 MoE)"
+  SPARK_MODEL="$(pull_spark_default_model)"
+  MODEL="$SPARK_MODEL"
+  REASON_MODEL="$SPARK_MODEL"
+  JUDGE_MODEL="${JUDGE_MODEL:-qwen3:32b}"
+  if [[ "$PROFILE" == "core" ]]; then
+    FAST_MODEL=""
+    ROUTING="off"
+  else
+    ollama pull qwen2.5:0.5b || true
+    FAST_MODEL="qwen2.5:0.5b"
+    ROUTING="on"
+  fi
+  ollama pull nomic-embed-text || true
+  SPARK_DROPZONE="$(default_desktop_dropzone_dir)"
+  mkdir -p "$SPARK_DROPZONE"/{_processed,_failed,files,_tmp}
+fi
+
 # 5. Vault scaffold
 echo "[5/9] Scaffolding vault at $VAULT ..."
 mkdir -p \
@@ -158,6 +182,15 @@ GZMO_FAST_MODEL="$FAST_MODEL"
 GZMO_REASON_MODEL="$REASON_MODEL"
 GZMO_JUDGE_MODEL="$JUDGE_MODEL"
 EOF
+
+if (( SPARK_MODE == 1 )); then
+  {
+    echo ""
+    echo "# DGX Spark — document / Dropzone RAG (see README)"
+    printf 'GZMO_DROPZONE_DIR="%s"\n' "$SPARK_DROPZONE"
+    spark_gzmo_env_lines
+  } >> "$REPO_ROOT/gzmo-daemon/.env"
+fi
 
 # 7. Daemon deps
 echo "[7/9] Installing daemon deps ..."

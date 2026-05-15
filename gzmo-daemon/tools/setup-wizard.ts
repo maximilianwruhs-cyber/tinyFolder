@@ -101,25 +101,46 @@ const TIERS: ModelTier[] = [
     notes: "Strong reasoning model. Fits 24GB VRAM in Q4.",
   },
   {
+    id: "qwen3:32b",
+    name: "Qwen 3 32B",
+    minVramMiB: 20 * 1024,
+    minRamMiB: 32 * 1024,
+    notes: "Dense ~20 GB Q4. Prior-generation 72B-class quality on 24 GB+ GPUs.",
+  },
+  {
+    id: "qwen3.6:35b-a3b",
+    name: "Qwen 3.6 35B-A3B (MoE)",
+    minVramMiB: 24 * 1024,
+    minRamMiB: 32 * 1024,
+    notes: "NVIDIA DGX Spark playbook default (MoE). ~24 GB; 256K context.",
+  },
+  {
+    id: "qwen3.6:35b-a3b-nvfp4",
+    name: "Qwen 3.6 35B-A3B NVFP4",
+    minVramMiB: 22 * 1024,
+    minRamMiB: 32 * 1024,
+    notes: "Blackwell/GB10 FP4 build (~22 GB). Best default on DGX Spark when available.",
+  },
+  {
     id: "llama3.1:70b",
     name: "Llama 3.1 70B",
     minVramMiB: 40 * 1024,
     minRamMiB: 64 * 1024,
-    notes: "Large generalist. Fits 48–64GB VRAM in Q4.",
+    notes: "Legacy large dense. Prefer qwen3.6 on 128 GB unified memory.",
   },
   {
     id: "llama3.3:70b",
     name: "Llama 3.3 70B",
     minVramMiB: 40 * 1024,
     minRamMiB: 64 * 1024,
-    notes: "Updated 70B generalist. Better instruction following than 3.1.",
+    notes: "Legacy 70B (8K context). Prefer qwen3.6 on Spark-class hardware.",
   },
   {
     id: "qwen2.5:72b",
     name: "Qwen 2.5 72B",
     minVramMiB: 48 * 1024,
     minRamMiB: 64 * 1024,
-    notes: "Top-tier coding assistant. The sweet spot for 128GB unified machines.",
+    notes: "Legacy dense 72B. Superseded by qwen3.6 / qwen3:32b on modern hardware.",
   },
   {
     id: "llama3.1:405b",
@@ -245,6 +266,21 @@ function gatherHardware(): HardwareReport {
   };
 }
 
+/** Prefer NVIDIA Spark / high-VRAM defaults over legacy 70B–72B dense models. */
+const PREFERRED_HIGH_VRAM_IDS = [
+  "qwen3.6:35b-a3b-nvfp4",
+  "qwen3.6:35b-a3b",
+  "qwen3:32b",
+] as const;
+
+function pickPreferredModel(candidates: ModelTier[]): ModelTier {
+  for (const id of PREFERRED_HIGH_VRAM_IDS) {
+    const t = candidates.find((c) => c.id === id);
+    if (t) return t;
+  }
+  return candidates[candidates.length - 1] ?? TIERS[0];
+}
+
 function recommend(report: HardwareReport): ModelTier[] {
   const totalVram = report.gpu
     .filter((g) => g.vramMiB > 0)
@@ -314,7 +350,7 @@ async function main() {
     }
     console.log(`Forcing model: ${chosen.id}`);
   } else if (autoMode || dryRun) {
-    chosen = candidates[candidates.length - 1] ?? TIERS[0];
+    chosen = pickPreferredModel(candidates);
     console.log(`${dryRun ? "[DRY-RUN] Would auto-select" : "Auto-selected"}: ${chosen.id} (${chosen.name})`);
   } else if (candidates.length === 0) {
     console.log("WARNING: Your hardware is below our minimums for the tested model list.");
@@ -324,9 +360,10 @@ async function main() {
     if (ok.toLowerCase() === "n") process.exit(0);
   } else {
     console.log("Recommended models for your hardware:");
+    const best = pickPreferredModel(candidates);
     candidates.forEach((t, i) => {
-      const marker = i === candidates.length - 1 ? "  → best fit" : "";
-      console.log(`  ${i + 1}) ${t.id.padEnd(22)} — ${t.name}${marker}`);
+      const marker = t.id === best.id ? "  → best fit" : "";
+      console.log(`  ${i + 1}) ${t.id.padEnd(30)} — ${t.name}${marker}`);
       console.log(`     ${t.notes}`);
       console.log("");
     });
@@ -337,7 +374,7 @@ async function main() {
     } else if (choice.trim()) {
       chosen = { id: choice.trim(), name: choice.trim(), minVramMiB: 0, minRamMiB: 0, notes: "user-specified" };
     } else {
-      chosen = candidates[candidates.length - 1];
+      chosen = pickPreferredModel(candidates);
     }
   }
 

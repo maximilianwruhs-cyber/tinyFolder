@@ -191,7 +191,8 @@ async function runDiagnostics(flags: ReturnType<typeof parseDoctorFlags>, env: D
           `zip ingest: ${z.enabled ? "on" : "off"}  max_zip_bytes=${z.maxZipBytes}  max_entry_bytes=${z.maxEntryUncompressedBytes}  max_entries_scanned=${z.maxEntriesScanned}  max_ratio=${z.maxCompressionRatio}`,
         ].join("\n");
 
-        const dropRoot = join(env.vaultPath, "GZMO", "Dropzone");
+        const { resolveDropzoneRoot } = await import("./src/dropzone_paths");
+        const dropRoot = resolveDropzoneRoot(env.vaultPath);
         const layoutChecks: Array<{ label: string; path: string }> = [
           { label: "GZMO/Dropzone/", path: dropRoot },
           { label: "GZMO/Dropzone/files/", path: join(dropRoot, "files") },
@@ -231,7 +232,11 @@ async function runDiagnostics(flags: ReturnType<typeof parseDoctorFlags>, env: D
   );
 
   // 2) Ollama discovery (readonly)
-  const requiredModels = [flags.profile === "deep" ? "hermes3:8b" : (process.env.OLLAMA_MODEL ?? "hermes3:8b"), "nomic-embed-text"];
+  const embedModel = process.env.GZMO_EMBED_MODEL?.trim() || "nomic-embed-text";
+  const requiredModels = [
+    flags.profile === "deep" ? "hermes3:8b" : (process.env.OLLAMA_MODEL ?? "hermes3:8b"),
+    embedModel,
+  ];
   const ollama = await runStep(stepCtx, {
     id: "ollama.discover",
     title: "Discover Ollama endpoint + required models",

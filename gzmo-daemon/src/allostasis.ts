@@ -20,6 +20,9 @@ export interface CortisolState {
   setPoint: number;       // dynamic energy target (0.5–0.9)
   lastTaskTime: number;   // Unix ms of last real task event
   anchoryBoost: number;   // current boost to feedback stabilization
+  /** Semantic noise budget consumed (see semantic_noise.ts). */
+  semanticNoiseUsed?: number;
+  semanticNoiseMax?: number;
 }
 
 export function defaultCortisolState(): CortisolState {
@@ -28,6 +31,23 @@ export function defaultCortisolState(): CortisolState {
     setPoint: 0.7,
     lastTaskTime: Date.now(),
     anchoryBoost: 0.0,
+    semanticNoiseUsed: 0,
+    semanticNoiseMax: 1.0,
+  };
+}
+
+/** Raise cortisol slightly when semantic noise budget is exceeded. */
+export function applySemanticNoiseStress(state: CortisolState, noiseUsed: number, noiseMax: number): CortisolState {
+  if (noiseMax <= 0 || noiseUsed < noiseMax) {
+    return { ...state, semanticNoiseUsed: noiseUsed, semanticNoiseMax: noiseMax };
+  }
+  const overflow = (noiseUsed - noiseMax) / noiseMax;
+  return {
+    ...state,
+    semanticNoiseUsed: noiseUsed,
+    semanticNoiseMax: noiseMax,
+    level: Math.min(1, state.level + overflow * 0.15),
+    anchoryBoost: state.anchoryBoost + overflow * 5,
   };
 }
 

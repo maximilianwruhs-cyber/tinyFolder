@@ -212,7 +212,7 @@ function extractEvidence(body: string): string | undefined {
 
 function statusOf(doc: TaskDocument): ApiTaskStatus {
   const s = String(doc.frontmatter.status ?? "pending").toLowerCase();
-  if (s === "processing" || s === "completed" || s === "failed") return s;
+  if (s === "processing" || s === "completed" || s === "failed" || s === "unbound") return s;
   return "pending";
 }
 

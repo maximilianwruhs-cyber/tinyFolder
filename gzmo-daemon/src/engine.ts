@@ -31,7 +31,16 @@ import { checkChainChecklist, enforceChainChecklist } from "./chain_enforce";
 import { enforcePerPartCitations } from "./part_citations";
 import { appendTaskPerf } from "./perf";
 import { OUTPUTS_REGISTRY } from "./outputs_registry";
-import { shadowJudge } from "./shadow_judge";
+import { readIntEnv } from "./pipelines/helpers";
+import { runDialecticLoop } from "./reasoning/dialectic_machine";
+import { checkKgCollisions, formatCollisionClarification, kgCollisionEnabled } from "./kg_collision";
+import {
+  loadTrustState,
+  saveTrustState,
+  trustAdjustedDsjThreshold,
+  trustLedgerEnabled,
+  updateTrust,
+} from "./learning/trust_ledger";
 import { applyPartQueryHooks, applyPostAnswerHooks, applyPostEvidenceMultiHooks, defaultEngineHooks } from "./engine_hooks";
 import { routeJudgeMultipart } from "./route_judge";
 import { atomicWriteJson } from "./vault_fs";
@@ -48,6 +57,7 @@ import {
   type ReasoningTrace,
 } from "./reasoning_trace";
 import { readBoolEnv } from "./pipelines/helpers";
+import { tickSemanticNoise, semanticNoiseExceeded, defaultSemanticNoiseState } from "./semantic_noise";
 import { runSearchTot } from "./reasoning/run_tot_search";
 import {
   appendStrategyEntry,
@@ -67,6 +77,59 @@ function getApiId(frontmatter: Record<string, unknown> | undefined | null): stri
   if (typeof raw !== "string") return undefined;
   const t = raw.trim();
   return t.length ? t : undefined;
+}
+
+async function recordTrustOutcome(vaultRoot: string | undefined, outcome: TaskStatus): Promise<void> {
+  if (!vaultRoot || !trustLedgerEnabled()) return;
+  try {
+    const prev = await loadTrustState(vaultRoot);
+    await saveTrustState(vaultRoot, updateTrust(prev, outcome));
+  } catch {
+    /* non-fatal */
+  }
+}
+
+async function emitTaskUnbound(params: {
+  document: TaskEvent["document"];
+  fileName: string;
+  filePath: string;
+  frontmatter: Record<string, unknown> | undefined;
+  apiId?: string;
+  pulse?: PulseLoop;
+  haltType: string;
+  clarification: string;
+  haltReason?: string;
+  vaultRoot?: string;
+}): Promise<void> {
+  const { document, fileName, filePath, frontmatter, apiId, pulse, haltType, clarification, haltReason, vaultRoot } =
+    params;
+  await document.markUnbound(clarification, {
+    haltReason: haltReason ?? haltType,
+    issueType: "ISSUE",
+  });
+  await recordTrustOutcome(vaultRoot, "unbound");
+
+  pulse?.emitEvent({
+    type: "task_failed",
+    fileName,
+    action: String(frontmatter?.action ?? "think"),
+    errorType: haltType,
+  });
+
+  if (apiId) {
+    broadcastEvent({
+      type: "task_unbound",
+      task_id: apiId,
+      data: {
+        fileName,
+        file_path: filePath,
+        action: String(frontmatter?.action ?? "think"),
+        halt_reason: haltReason ?? haltType,
+        error: haltType,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
 }
 
 // ── Task Actions ───────────────────────────────────────────
@@ -207,6 +270,48 @@ export async function processTask(
     const pipeline = action === "search" ? new SearchPipeline() : new ThinkPipeline();
     const ctx = await pipeline.prepare(req);
 
+    if (ctx.haltReason) {
+      console.log(`[ENGINE] Evidence gate halted: ${fileName} — ${ctx.haltReason.slice(0, 80)}`);
+      await emitTaskUnbound({
+        document,
+        fileName,
+        filePath,
+        frontmatter: frontmatter ?? undefined,
+        apiId,
+        pulse,
+        haltType: "evidence_gate_halt",
+        clarification: ctx.haltReason,
+        haltReason: ctx.haltReason,
+        vaultRoot,
+      });
+      return;
+    }
+
+    if (kgCollisionEnabled() && vaultRoot) {
+      const collisions = await checkKgCollisions(vaultRoot, body, taskRelPath);
+      if (collisions.length > 0) {
+        const clarification = formatCollisionClarification(collisions);
+        await emitTaskUnbound({
+          document,
+          fileName,
+          filePath,
+          frontmatter: frontmatter ?? undefined,
+          apiId,
+          pulse,
+          haltType: "entity_collision",
+          clarification,
+          haltReason: "entity_collision",
+          vaultRoot,
+        });
+        return;
+      }
+    }
+
+    let trustState: Awaited<ReturnType<typeof loadTrustState>> | undefined;
+    if (trustLedgerEnabled() && vaultRoot) {
+      trustState = await loadTrustState(vaultRoot);
+    }
+
     let strategyContext = "";
     if (learningEnabled() && vaultRoot) {
       const ledger = await loadLedger(vaultRoot, 200);
@@ -221,7 +326,7 @@ export async function processTask(
 
     const snap = pulse?.snapshot() ?? defaultSnapshot();
     const temp = snap.llmTemperature ?? 0.7;
-    const maxTok = snap.llmMaxTokens ?? 400;
+    const maxTok = readIntEnv("GZMO_LLM_MAX_TOKENS", snap.llmMaxTokens ?? 400, 128, 8192);
     const valence = snap.llmValence ?? 0;
     console.log(`[ENGINE] Model: ${OLLAMA_MODEL} (temp: ${temp.toFixed(2)}, tokens: ${maxTok}, val: ${valence >= 0 ? "+" : ""}${valence.toFixed(2)}, phase: ${snap.phase ?? "?"})`);
 
@@ -254,6 +359,44 @@ export async function processTask(
     let rawOutput = ctx.deterministicAnswer;
     const usedDeterministic = Boolean(rawOutput);
 
+    if (
+      readBoolEnv("GZMO_ENABLE_TEACHBACK", false) &&
+      action === "search" &&
+      !usedDeterministic &&
+      !useTot
+    ) {
+      const teachPrompt = [
+        "Summarize the user's goal in 1-2 sentences.",
+        "List any missing context needed to answer confidently.",
+        "If the query is too vague to search the vault, reply with MISSING_CONTEXT: and your questions.",
+        "",
+        "USER QUERY:",
+        body,
+      ].join("\n");
+      const tb = await span("teachback.preflight", async () => {
+        const opts = { temperature: 0.2, maxTokens: 200 };
+        return readBoolEnv("GZMO_ENABLE_MODEL_ROUTING", false)
+          ? inferByRole("fast", systemPromptWithStrategy, teachPrompt, opts)
+          : inferDetailed(systemPromptWithStrategy, teachPrompt, opts);
+      });
+      if (/MISSING_CONTEXT:/i.test(tb.answer)) {
+        const clarification = tb.answer.replace(/^[\s\S]*?MISSING_CONTEXT:\s*/i, "").trim() || tb.answer;
+        await emitTaskUnbound({
+          document,
+          fileName,
+          filePath,
+          frontmatter: frontmatter ?? undefined,
+          apiId,
+          pulse,
+          haltType: "teachback_halt",
+          clarification,
+          haltReason: "teachback_halt",
+          vaultRoot,
+        });
+        return;
+      }
+    }
+
     if (useTot && !usedDeterministic) {
       const totOut = await span("reasoning.tot", async () =>
         runSearchTot({
@@ -266,6 +409,21 @@ export async function processTask(
           traceId,
         }),
       );
+      if (totOut.haltReason) {
+        await emitTaskUnbound({
+          document,
+          fileName,
+          filePath,
+          frontmatter: frontmatter ?? undefined,
+          apiId,
+          pulse,
+          haltType: "tot_gate_halt",
+          clarification: totOut.haltReason,
+          haltReason: totOut.haltReason,
+          vaultRoot,
+        });
+        return;
+      }
       rawOutput = totOut.answer;
       if (tracesEnabled()) traceNodes.push(...totOut.totFlatNodes);
       // Prefer ToT's own strategy injection measurement when present.
@@ -299,9 +457,93 @@ export async function processTask(
     }
 
     let fullText = await pipeline.validateAndShape(rawOutput, req, ctx);
-    
+
+    if (readBoolEnv("GZMO_ENABLE_SEMANTIC_NOISE", false) && action === "search") {
+      const noiseMax = Number.parseFloat(process.env.GZMO_SEMANTIC_NOISE_MAX ?? "1.0");
+      const noiseState = tickSemanticNoise(
+        defaultSemanticNoiseState(Number.isFinite(noiseMax) ? noiseMax : 1.0),
+        body,
+        fullText,
+      );
+      if (semanticNoiseExceeded(noiseState)) {
+        await emitTaskUnbound({
+          document,
+          fileName,
+          filePath,
+          frontmatter: frontmatter ?? undefined,
+          apiId,
+          pulse,
+          haltType: "semantic_noise_halt",
+          clarification: [
+            "Response drifted too far from the stated query intent (semantic noise budget exceeded).",
+            "",
+            `**Drift score:** ${noiseState.lastDriftScore.toFixed(2)}`,
+            "",
+            "**Suggestions:**",
+            "- Narrow the query or add vault context",
+            "- Resume with `status: pending` after editing the task body",
+          ].join("\n"),
+          haltReason: "semantic_noise_halt",
+          vaultRoot,
+        });
+        return;
+      }
+    }
+
+    const dsjEnabled = readBoolEnv("GZMO_ENABLE_DSJ", false);
+    let dsjThreshold = Number.parseFloat(process.env.GZMO_DSJ_THRESHOLD ?? "0.5");
+    if (trustState) dsjThreshold = trustAdjustedDsjThreshold(dsjThreshold, trustState);
+    let dsjMetrics: { initial?: number; rewrite?: number; accepted?: boolean } | undefined;
+
+    if (dsjEnabled && action === "search" && !usedDeterministic && !useTot) {
+      const dialectic = await span("dialectic.loop", () =>
+        runDialecticLoop({
+          userPrompt: body,
+          initialAnswer: fullText,
+          systemPrompt: systemPromptWithStrategy,
+          evidenceContext: ctx.vaultContext || undefined,
+          threshold: dsjThreshold,
+          temperature: temp,
+          maxTokens: maxTok,
+        }),
+      );
+
+      if (dialectic.kind === "accept") {
+        fullText = await pipeline.validateAndShape(dialectic.answer, req, ctx);
+        dsjMetrics = dialectic.metrics;
+      } else if (dialectic.kind === "unbound") {
+        dsjMetrics = dialectic.metrics;
+        await emitTaskUnbound({
+          document,
+          fileName,
+          filePath,
+          frontmatter: frontmatter ?? undefined,
+          apiId,
+          pulse,
+          haltType: dialectic.haltType,
+          clarification: dialectic.clarification,
+          haltReason: dialectic.haltReason,
+          vaultRoot,
+        });
+        if (vaultRoot) {
+          appendTaskPerf(vaultRoot, {
+            type: "task_perf",
+            created_at: new Date().toISOString(),
+            fileName,
+            action,
+            ok: false,
+            total_ms: Date.now() - startTime,
+            spans,
+            dsj: dsjMetrics,
+          }).catch(() => {});
+        }
+        return;
+      }
+    }
+
     const output = `\n---\n\n## GZMO Response\n*${new Date().toISOString()}*\n\n${fullText}`;
     await span("frontmatter.completed", () => document.markCompleted(output));
+    await recordTrustOutcome(vaultRoot, "completed");
 
     console.log(`[ENGINE] Completed: ${fileName} (${action})`);
 
@@ -416,6 +658,7 @@ export async function processTask(
           total_ms: Date.now() - startTime,
           spans,
           route_judge: routeJudge,
+          ...(dsjMetrics ? { dsj: dsjMetrics } : {}),
         }).catch(() => {});
       }
     }
@@ -547,6 +790,7 @@ export async function processTask(
 
     try {
       await document.markFailed(err?.message || "Unknown error");
+      await recordTrustOutcome(vaultRoot, "failed");
     } catch (markErr: any) {
       console.error(
         `[ENGINE] Failed to persist failure status for ${fileName}: ${markErr?.message ?? markErr}`,

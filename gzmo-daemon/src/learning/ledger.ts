@@ -77,6 +77,12 @@ export async function appendStrategyEntry(
     timestamp: new Date().toISOString(),
   };
   await safeAppendJsonl(vaultPath, LEDGER_PATH, full);
+  try {
+    const { writeStrategyReview } = await import("./strategy_review");
+    await writeStrategyReview(vaultPath, full);
+  } catch {
+    /* non-fatal */
+  }
 }
 
 export async function loadLedger(vaultPath: string, maxLines = 200): Promise<StrategyEntry[]> {
