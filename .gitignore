@@ -66,10 +66,7 @@ gzmo-daemon/doctor-report.*
 # local temp vaults (tests / smoke)
 .tmp_*/
 
-# repo meta kept local (optional)
-.github/
-CONTRIBUTING.md
-SECURITY.md
+# repo meta — CI and contributor docs are tracked in git
 
 # OS / editor
 .DS_Store

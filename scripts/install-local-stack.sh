@@ -43,10 +43,18 @@ cat <<EOF
 ═══════════════════════════════════════════════════
 EOF
 
+# NOTE: This installer uses curl | bash for Bun and Ollama upstream installers.
+# Both vendors currently distribute via single-script URLs without published checksums.
+# If your threat model requires verified installers, download manually and audit first.
+
 # 1. Bun
 if ! command -v bun >/dev/null 2>&1; then
   echo "[1/9] Installing Bun..."
-  curl -fsSL https://bun.sh/install | bash
+  curl -fsSL --retry 2 https://bun.sh/install | bash
+  if [[ ! -x "$HOME/.bun/bin/bun" ]]; then
+    echo "ERROR: Bun install did not produce ~/.bun/bin/bun" >&2
+    exit 1
+  fi
   export PATH="$HOME/.bun/bin:$PATH"
 else
   echo "[1/9] Bun already installed: $(bun --version)"
@@ -55,7 +63,11 @@ fi
 # 2. Ollama
 if ! command -v ollama >/dev/null 2>&1; then
   echo "[2/9] Installing Ollama..."
-  curl -fsSL https://ollama.com/install.sh | sh
+  curl -fsSL --retry 2 https://ollama.com/install.sh | sh
+  if ! command -v ollama >/dev/null 2>&1; then
+    echo "ERROR: Ollama install did not create 'ollama' on PATH" >&2
+    exit 1
+  fi
 else
   echo "[2/9] Ollama already installed."
 fi
@@ -170,8 +182,9 @@ GZMO_API_ENABLED=1
 GZMO_API_HOST="127.0.0.1"
 GZMO_API_PORT="12700"
 # GZMO_API_SOCKET="/tmp/gzmo.sock"
-
 GZMO_LOCAL_ONLY=1
+# Generate a secret for production: openssl rand -hex 32
+GZMO_API_TOKEN="$(openssl rand -hex 32 2>/dev/null || echo change-me-set-GZMO_API_TOKEN)"
 GZMO_MULTIQUERY=on
 GZMO_RERANK_LLM=on
 GZMO_ANCHOR_PRIOR=on

@@ -914,7 +914,6 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
         `pending: ${d.pending_tasks}`,
         `processing: ${d.processing_tasks}`,
         `uptime_seconds: ${d.uptime_seconds}`,
-        d.vault_path ? `vault: ${d.vault_path}` : "",
       ].filter(Boolean).join("\n");
       return { content: [{ type: "text", text }], details: { ok: true, data: d } };
     },
@@ -1201,7 +1200,6 @@ export default function gzmoTinyFolderExtension(pi: ExtensionAPI) {
         `pending: ${d.pending_tasks}`,
         `processing: ${d.processing_tasks}`,
         `uptime_seconds: ${d.uptime_seconds}`,
-        d.vault_path ? `vault: ${d.vault_path}` : "",
       ].filter(Boolean);
       ctx.ui.notify(lines.join("\n"), "info");
     },

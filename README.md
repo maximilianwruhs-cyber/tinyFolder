@@ -513,8 +513,19 @@ The daemon exposes a thin REST + SSE layer when enabled. Tasks submitted via HTT
 - **`GZMO_API_HOST`**: hostname to bind (default: `127.0.0.1`)
 - **`GZMO_API_PORT`**: TCP port (default: `12700`)
 - **`GZMO_API_SOCKET`**: path to a Unix domain socket — when set, overrides host/port
-- **`GZMO_LOCAL_ONLY`**: `on|off` — when `on`, refuse to start unless the bind address is loopback, and lock CORS to loopback origins via strict URL parsing (default: `off`)
-- **`GZMO_API_TOKEN`**: shared secret — when set, every route except `/health` requires `Authorization: Bearer <token>`. **Required** when binding to a non-loopback address with `GZMO_LOCAL_ONLY=0`.
+- **`GZMO_LOCAL_ONLY`**: `on|off` — when `on`, refuse to start unless the bind address is loopback, and lock CORS to loopback origins via strict URL parsing (default: **`on`**)
+- **`GZMO_API_TOKEN`**: shared secret — **required** to start the API (all routes including `/health` use `Authorization: Bearer <token>`). Generate a strong random value even on `127.0.0.1`.
+- **`GZMO_API_ALLOW_INSECURE`**: `on|off` — dev/tests only: allow starting the API without `GZMO_API_TOKEN` (default: `off`)
+
+**Recommended secure API block** (copy into `.env` when enabling the HTTP layer):
+
+```bash
+GZMO_API_ENABLED=1
+GZMO_API_HOST=127.0.0.1
+GZMO_API_PORT=12700
+GZMO_LOCAL_ONLY=1
+GZMO_API_TOKEN="<your-strong-random-secret>"
+```
 - **`GZMO_API_MAX_BODY_BYTES`**: hard cap on request body bytes (default: `1048576` = 1 MiB)
 - **`GZMO_API_MAX_TASK_CHARS`**: cap on `body` field length for `POST /api/v1/task` (default: `100000`)
 - **`GZMO_API_MAX_QUERY_CHARS`**: cap on `query` field length for `POST /api/v1/search` (default: `10000`)
