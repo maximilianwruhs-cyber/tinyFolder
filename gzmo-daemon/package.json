@@ -20,7 +20,7 @@
     "benchmark": "bun run src/perf_benchmark.ts"
   },
   "devDependencies": {
-    "@types/bun": "1.3.12",
+    "@types/bun": "1.3.14",
     "@types/papaparse": "5.5.2",
     "@types/yauzl": "2.10.3",
     "fflate": "0.8.2",
