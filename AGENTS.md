@@ -141,7 +141,7 @@ Use this as a **order-of-operations** reminder; details and commands live in REA
 - [ ] **Ollama:** `./scripts/start-ollama-optimized.sh` (Spark: confirm `OLLAMA_CONTEXT_LENGTH=262144` in logs).
 - [ ] `ollama pull` for `OLLAMA_MODEL` + `GZMO_EMBED_MODEL` (defaults: laptop `hermes3:8b` + `nomic-embed-text`; **Spark** `qwen3.6:35b-a3b-nvfp4` + `nomic-embed-text`).
 - [ ] `cd gzmo-daemon && bun install`
-- [ ] `gzmo-daemon/.env`: absolute `VAULT_PATH`, `GZMO_PROFILE=core`, `OLLAMA_*`, optional `GZMO_DROPZONE_DIR` (Spark: use `.env.spark.example`).
+- [ ] `gzmo-daemon/.env`: copy from [`.env.example`](gzmo-daemon/.env.example); absolute `VAULT_PATH`; `GZMO_PROFILE=core` unless you intentionally use `art`/`interactive`; `OLLAMA_*`; optional `GZMO_DROPZONE_DIR` (**Spark:** copy [`.env.spark.example`](gzmo-daemon/.env.spark.example)).
 - [ ] Document RAG on Spark: `GZMO_TOPK=12`, `GZMO_EVIDENCE_MAX_*`, `GZMO_LLM_MAX_TOKENS=2048` (bootstrap writes these on Spark).
 - [ ] Vault dirs: `GZMO/Inbox`, `wiki/incoming`, … (see scaffold); Dropzone dir exists on Desktop if using `GZMO_DROPZONE_DIR`.
 - [ ] `ollama ps` after first run: **100% GPU**, `CONTEXT` ≈ 262144 on Spark.
