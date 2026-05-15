@@ -400,7 +400,7 @@ async function main() {
     process.exit(1);
   }
 
-  const profile = (autoMode || dryRun) ? "core" : await ask("GZMO profile [core/standard/full/minimal] (default: core): ");
+  const profile = (autoMode || dryRun) ? "core" : await ask("GZMO profile [core/standard/full/art/minimal] (default: core): ");
   const profileName = (profile.trim() || "core") as any;
 
   // Build env content, preserving old API keys as commented fallback

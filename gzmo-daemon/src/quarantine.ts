@@ -1,6 +1,7 @@
 import { join } from "path";
 import { safeWriteText } from "./vault_fs";
 import { createAutoInboxTasks, type AutoTaskSpec } from "./auto_tasks";
+import { readAutoInboxFromWikiRepair } from "./pipelines/helpers";
 
 export type QuarantineReason =
   | "wiki_missing_evidence"
@@ -61,6 +62,8 @@ export async function createRepairTask(params: {
   quarantineFile: string; // basename
   suggestion: string;
 }): Promise<void> {
+  if (!readAutoInboxFromWikiRepair()) return;
+
   const tasks: AutoTaskSpec[] = [{
     type: "maintenance",
     title: params.title,

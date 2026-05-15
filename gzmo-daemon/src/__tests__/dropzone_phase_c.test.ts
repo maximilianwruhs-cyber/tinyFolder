@@ -159,6 +159,9 @@ describe("pickConvertibleZipMember", () => {
 
 describe("handleDropzoneFile dedup", () => {
   it("second identical file produces dropzone-duplicate-ref", async () => {
+    const prevDrop = process.env.GZMO_DROPZONE_DIR;
+    // Bun may load gzmo-daemon/.env in dev; external drop root would make these paths a no-op.
+    delete process.env.GZMO_DROPZONE_DIR;
     const vault = await mkdtemp(join(tmpdir(), "gzmo-dz-int-"));
     try {
       await mkdir(join(vault, "GZMO", "Inbox"), { recursive: true });
@@ -181,6 +184,8 @@ describe("handleDropzoneFile dedup", () => {
       expect(texts.some((t) => t.includes("dropzone-duplicate-ref"))).toBe(true);
     } finally {
       await rm(vault, { recursive: true, force: true });
+      if (prevDrop === undefined) delete process.env.GZMO_DROPZONE_DIR;
+      else process.env.GZMO_DROPZONE_DIR = prevDrop;
     }
   });
 });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -11,6 +11,11 @@ import {
 describe("dropzone_paths", () => {
   const vault = mkdtempSync(join(tmpdir(), "gzmo-vault-"));
   const external = mkdtempSync(join(tmpdir(), "gzmo-drop-"));
+
+  beforeEach(() => {
+    // gzmo-daemon/.env may set GZMO_DROPZONE_DIR; clear before each assertion.
+    delete process.env.GZMO_DROPZONE_DIR;
+  });
 
   afterEach(() => {
     delete process.env.GZMO_DROPZONE_DIR;

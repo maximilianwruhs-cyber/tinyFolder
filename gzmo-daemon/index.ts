@@ -4,7 +4,8 @@
  * Boot modes are controlled by GZMO_PROFILE:
  *   core     — inbox, tasks, embeddings, memory (work mode)
  *   standard — core + pruning + dashboard pulse
- *   full     — everything (art project)
+ *   full     — everything (wiki consolidation, ingest, pruning, …)
+ *   art      — chaos / dreams / self-ask / pulse + inbox / embeddings (no wiki auto-cycle; auto-inbox off by default)
  *   minimal  — core without embeddings sync
  *   heartbeat— watcher + task processing off, pulse only
  *   interactive — core + GAH/DSJ/teachback enabled by default (clarification-first)
@@ -38,6 +39,7 @@ import { TaskSemaphore, readTaskConcurrency } from "./src/task_semaphore";
 import { sweepOldTraces } from "./src/reasoning_trace";
 import { startVramProbe, stopVramProbe } from "./src/vram_probe";
 import { loadConfig } from "./src/config";
+import { TaskDocument } from "./src/frontmatter";
 import { writeBootReport } from "./src/boot_report";
 import { ensureDropzoneScaffold, resolveDropzoneRoot } from "./src/dropzone_paths";
 
@@ -258,6 +260,9 @@ let lastTaskCompletedAt = 0;
 const taskSem = new TaskSemaphore(readTaskConcurrency());
 console.log(`[TASKS] Concurrency limit: ${taskSem.limit}`);
 
+/** Task files currently executing `processTask` (shutdown must mark zombies failed). */
+const inFlightTaskPaths = new Set<string>();
+
 watcher.on("task", async (event) => {
   if (!runtime.enableTaskProcessing) return;
   const action = event.frontmatter?.action ?? "think";
@@ -266,6 +271,7 @@ watcher.on("task", async (event) => {
   await taskSem.acquire();
   activeTaskCount++;
   stream.log(`📥 Task claimed: **${event.fileName}** (${action})`);
+  inFlightTaskPaths.add(event.filePath);
   try {
     await processTask(event, watcher, pulse, embeddings.getStore(), memory);
     stream.log(`✅ Task completed: **${event.fileName}**`);
@@ -276,6 +282,7 @@ watcher.on("task", async (event) => {
   } catch (err: any) {
     stream.log(`❌ Task failed: **${event.fileName}** — ${err?.message}`);
   } finally {
+    inFlightTaskPaths.delete(event.filePath);
     activeTaskCount--;
     taskSem.release();
   }
@@ -729,6 +736,8 @@ async function shutdown(signal: string) {
     }
   }
 
+  const pathsToRecover = [...inFlightTaskPaths];
+
   // 3. Wait for in-flight tasks to finish (or hit the drain budget).
   if (activeTaskCount > 0) {
     console.log(`[DAEMON] Waiting for ${activeTaskCount} task(s) to complete...`);
@@ -740,6 +749,20 @@ async function shutdown(signal: string) {
 
   // 4. Now signal abort: any LLM stream still running will throw cleanly via R2.
   daemonAbort.abort();
+
+  // 4b. Let engine catch blocks run briefly, then fail any still-processing tasks.
+  await new Promise((r) => setTimeout(r, 400));
+  for (const fp of pathsToRecover) {
+    try {
+      const doc = await TaskDocument.load(fp);
+      if (doc?.status === "processing") {
+        await doc.markFailed(`Daemon shutdown (${signal}): in-flight LLM work was aborted mid-task.`);
+        console.warn(`[DAEMON] Marked stale processing task failed: ${fp}`);
+      }
+    } catch (e: unknown) {
+      console.warn(`[DAEMON] Could not finalize task status for ${fp}: ${e}`);
+    }
+  }
 
   // 5. Wait for the embedding queue to flush (bounded — embeddings are best effort).
   try {

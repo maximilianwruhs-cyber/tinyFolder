@@ -28,6 +28,12 @@ import { runWikiLint } from "./src/wiki_lint";
 import { syncEmbeddings } from "./src/embeddings";
 import { EmbeddingsQueue } from "./src/embeddings_queue";
 import { describeRuntimeProfile, resolveRuntimeProfile } from "./src/runtime_profile";
+import {
+  readAutoInboxFromDreams,
+  readAutoInboxFromSelfAsk,
+  readAutoInboxFromWikiRepair,
+  maxAutoTasksPerHourDefault,
+} from "./src/pipelines/helpers";
 import { defaultConfig } from "./src/types";
 import { PulseLoop } from "./src/pulse";
 import { VaultWatcher } from "./src/watcher";
@@ -112,10 +118,15 @@ async function runDiagnostics(flags: ReturnType<typeof parseDoctorFlags>, env: D
       run: async () => {
         const implied = mapDoctorToGzmoProfile(flags.profile);
         const runtime = resolveRuntimeProfile();
+        const auto =
+          `wiki_repair→inbox=${readAutoInboxFromWikiRepair()}; ` +
+          `self_ask→inbox=${readAutoInboxFromSelfAsk()}; ` +
+          `dreams→inbox=${readAutoInboxFromDreams()}; ` +
+          `auto_tasks/hour default=${maxAutoTasksPerHourDefault()} (set GZMO_AUTO_TASKS_PER_HOUR to override)`;
         return {
           status: "PASS",
           summary: `doctor=${flags.profile} → implied daemon profile=${implied}`,
-          details: `GZMO_PROFILE env: ${process.env.GZMO_PROFILE ?? "(unset)"}\nResolved: ${describeRuntimeProfile(runtime)}`,
+          details: `GZMO_PROFILE env: ${process.env.GZMO_PROFILE ?? "(unset)"}\nResolved: ${describeRuntimeProfile(runtime)}\nAuto-inbox: ${auto}`,
         };
       },
     }),

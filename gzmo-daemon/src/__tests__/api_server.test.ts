@@ -59,6 +59,10 @@ async function startTestServer(envOverrides: Record<string, string> = {}): Promi
   clearRegistry: () => void;
   token: string;
 }> {
+  // api_server.ts reads these at module load; parallel tests must not inherit another test's caps.
+  delete process.env.GZMO_API_MAX_BODY_BYTES;
+  delete process.env.GZMO_API_MAX_TASK_CHARS;
+  delete process.env.GZMO_API_MAX_QUERY_CHARS;
   const defaults: Record<string, string> = {
     GZMO_API_TOKEN: TEST_API_TOKEN,
     GZMO_LOCAL_ONLY: "1",

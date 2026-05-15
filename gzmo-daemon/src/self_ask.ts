@@ -35,8 +35,10 @@ import { verifySafety } from "./verifier_safety";
 import { scoreSelfAskOutput } from "./self_ask_quality";
 import { extractEdgeCandidate, type EdgeStore } from "./honeypot_edges";
 import { validateEdgeCandidate } from "./linc_filter";
+import { normalizeOllamaV1BaseUrl } from "./inference";
+import { readAutoInboxFromSelfAsk } from "./pipelines/helpers";
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
+const OLLAMA_BASE_URL = normalizeOllamaV1BaseUrl(process.env.OLLAMA_URL);
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "hermes3:8b";
 const ollama = createOpenAICompatible({ name: "ollama", baseURL: OLLAMA_BASE_URL });
 
@@ -654,7 +656,7 @@ export class SelfAskEngine {
     }
 
     // Closed loop: only actionable assessments promote tasks.
-    if (assessment.signal === "actionable" && assessment.nextActions.length > 0) {
+    if (assessment.signal === "actionable" && assessment.nextActions.length > 0 && readAutoInboxFromSelfAsk()) {
       const typed = assessment.nextActions
         .map((line) => ({ raw: line, parsed: parseTypedNextAction(line.replace(/^-+\s*/, "")) }))
         .filter((x) => x.parsed !== null) as Array<{ raw: string; parsed: { type: any; title: string } }>;

@@ -2,7 +2,7 @@ import { mkdirSync } from "fs";
 import { accessSync, constants as fsConstants, writeFileSync, unlinkSync } from "fs";
 import { isAbsolute, join, resolve } from "path";
 
-export type GzmoProfile = "core" | "standard" | "full" | "minimal" | "heartbeat" | "interactive";
+export type GzmoProfile = "core" | "standard" | "full" | "minimal" | "heartbeat" | "interactive" | "art";
 
 export interface DaemonConfig {
   vaultPath: string;
@@ -25,14 +25,30 @@ function readProfile(): GzmoProfile {
     raw === "full" ||
     raw === "minimal" ||
     raw === "heartbeat" ||
-    raw === "interactive"
+    raw === "interactive" ||
+    raw === "art"
   ) {
     return raw;
   }
   throw new Error(
     `Invalid GZMO_PROFILE=${JSON.stringify(process.env.GZMO_PROFILE)}. ` +
-      `Expected one of: core, standard, full, minimal, heartbeat, interactive.`,
+      `Expected one of: core, standard, full, minimal, heartbeat, interactive, art.`,
   );
+}
+
+/** When `GZMO_PROFILE=art`, set conservative defaults for subsystem + auto-inbox flags (explicit env wins). */
+export function applyArtProfileDefaults(): void {
+  if ((process.env.GZMO_PROFILE ?? "").trim().toLowerCase() !== "art") return;
+  const setDefault = (key: string, value: string) => {
+    if (process.env[key] === undefined) process.env[key] = value;
+  };
+  setDefault("GZMO_ENABLE_WIKI", "off");
+  setDefault("GZMO_ENABLE_INGEST", "off");
+  setDefault("GZMO_ENABLE_WIKI_LINT", "off");
+  setDefault("GZMO_ENABLE_PRUNING", "off");
+  setDefault("GZMO_AUTO_INBOX_FROM_WIKI_REPAIR", "off");
+  setDefault("GZMO_AUTO_INBOX_FROM_SELF_ASK", "off");
+  setDefault("GZMO_AUTO_INBOX_FROM_DREAMS", "off");
 }
 
 /** Enable clarification-first flags when profile=interactive (explicit env wins). */
@@ -77,6 +93,7 @@ function assertVaultWritable(vaultPath: string): void {
  */
 export function loadConfig(): DaemonConfig {
   applyInteractiveProfileDefaults();
+  applyArtProfileDefaults();
 
   const vaultPath = process.env.VAULT_PATH
     ? resolve(process.env.VAULT_PATH)

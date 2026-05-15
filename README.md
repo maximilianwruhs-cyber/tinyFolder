@@ -805,6 +805,16 @@ Important operational invariant:
 
 Use `GZMO_PROFILE` to enable subsets of functionality for debugging or weak hardware.
 
+| Profile | Chaos pulse | Dreams / self-ask | Wiki consolidate | Notes |
+|---------|-------------|-------------------|------------------|--------|
+| `core` | off | off | off | Tasks + embeddings; no autonomous art loops |
+| `standard` | on | off | off | Core + pruning + dashboard pulse |
+| `minimal` | off | off | off | Tasks without embedding sync |
+| `heartbeat` | on | off | off | Pulse only; no inbox |
+| `art` | on | on | **off** | Chaos + dreams + cabinet; wiki auto-cycle off; [Configure](README.md#configure-environment-variables) for `GZMO_AUTO_INBOX_*` defaults |
+| `full` | on | on | on | Maximum autonomous subsystems |
+| `interactive` | off | off | off | Clarification-first (GAH/DSJ); same task surface as core |
+
 Example:
 
 ```bash
@@ -812,9 +822,18 @@ cd gzmo-daemon
 GZMO_PROFILE=minimal bun run summon
 ```
 
-(Profiles are implemented in code; use them when you want deterministic subsystem reduction.)
+(Profiles are implemented in code; explicit `GZMO_ENABLE_*` still overrides.)
 
----
+**Auto-generated Inbox spam:** Wiki quarantine repairs, dreams, and self-ask can call `createAutoInboxTasks`. Gate with:
+
+- `GZMO_AUTO_INBOX_FROM_WIKI_REPAIR`
+- `GZMO_AUTO_INBOX_FROM_SELF_ASK`
+- `GZMO_AUTO_INBOX_FROM_DREAMS`
+- Hourly budget: `GZMO_AUTO_TASKS_PER_HOUR` (defaults are lower under `GZMO_PROFILE=art` when unset).
+
+**Stale maintenance files:** `./scripts/archive-inbox-noise.sh` (dry-run by default; `--apply` moves matches to `GZMO/Inbox/_archive/…`).
+
+**Shutdown zombies:** Tasks left in `processing` after a timed-out drain are marked `failed`; tune `GZMO_SHUTDOWN_DRAIN_MS`. Boot recovery uses `GZMO_RECOVERY_GRACE_MS` (default 30000).
 
 ## Proof / smoke / eval commands
 

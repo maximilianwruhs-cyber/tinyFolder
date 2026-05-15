@@ -158,6 +158,31 @@ export function readBoolEnv(name: string, defaultValue: boolean): boolean {
   return defaultValue;
 }
 
+/** True when `GZMO_PROFILE=art` (case-insensitive). */
+export function isArtProfileEnv(): boolean {
+  return (process.env.GZMO_PROFILE ?? "").trim().toLowerCase() === "art";
+}
+
+/** Auto-inbox from wiki quarantine repair tasks (default off for `art` profile). */
+export function readAutoInboxFromWikiRepair(): boolean {
+  return readBoolEnv("GZMO_AUTO_INBOX_FROM_WIKI_REPAIR", !isArtProfileEnv());
+}
+
+/** Auto-inbox from self-ask typed next actions (default off for `art` profile). */
+export function readAutoInboxFromSelfAsk(): boolean {
+  return readBoolEnv("GZMO_AUTO_INBOX_FROM_SELF_ASK", !isArtProfileEnv());
+}
+
+/** Auto-inbox from dream next actions (default off for `art` profile). */
+export function readAutoInboxFromDreams(): boolean {
+  return readBoolEnv("GZMO_AUTO_INBOX_FROM_DREAMS", !isArtProfileEnv());
+}
+
+/** Default hourly cap for `createAutoInboxTasks` when `GZMO_AUTO_TASKS_PER_HOUR` is unset. */
+export function maxAutoTasksPerHourDefault(): number {
+  return isArtProfileEnv() ? 5 : 20;
+}
+
 export function readIntEnv(name: string, defaultValue: number, min: number, max: number): number {
   const raw = process.env[name];
   if (!raw) return defaultValue;

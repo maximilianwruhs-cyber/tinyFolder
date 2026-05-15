@@ -8,7 +8,7 @@ import { streamText } from "ai";
 import { applyMindFilter } from "./mind_filter";
 import { DEFAULT_TIMEOUTS, makeAbortSignal } from "./lifecycle";
 
-function normalizeOllamaV1BaseUrl(raw: string | undefined): string {
+export function normalizeOllamaV1BaseUrl(raw: string | undefined): string {
   const base0 = (raw ?? "http://localhost:11434/v1").replace(/\/$/, "");
   return base0.endsWith("/v1") ? base0 : `${base0}/v1`;
 }

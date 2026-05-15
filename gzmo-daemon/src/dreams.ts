@@ -18,6 +18,7 @@ import { searchVault, formatSearchContext, type SearchResult } from "./search";
 import { atomicWriteJson, safeWriteText } from "./vault_fs";
 import { createAutoInboxTasks, parseTypedNextAction, type AutoTaskSpec } from "./auto_tasks";
 import { parseStructuredDreamReflection } from "./structured";
+import { readAutoInboxFromDreams } from "./pipelines/helpers";
 import { loadAnchorSources, summarizeAnchorFailures, verifyAnchors, type AnchorVerificationResult } from "./anchor_verifier";
 import { REFLECTION_FAILURE_PREMISE, SMALL_MODEL_AUDITOR_RULES } from "./small_model_rules";
 
@@ -182,7 +183,7 @@ export class DreamEngine {
       .map((line) => ({ raw: line, parsed: parseTypedNextAction(line) }))
       .filter((x) => x.parsed !== null) as Array<{ raw: string; parsed: { type: any; title: string } }>;
 
-    if (typed.length > 0) {
+    if (typed.length > 0 && readAutoInboxFromDreams()) {
       const tasks: AutoTaskSpec[] = typed.map((t) => ({
         type: t.parsed.type,
         title: t.parsed.title,

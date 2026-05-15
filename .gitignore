@@ -4,6 +4,7 @@
 # build output
 **/dist
 **/out
+**/coverage
 
 # logs
 **/logs

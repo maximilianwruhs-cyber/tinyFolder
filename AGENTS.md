@@ -126,6 +126,11 @@ export GZMO_ENV_FILE="$REPO/gzmo-daemon/.env"
 7. Bill smoke test: drop fake invoice in `GZMO_DROPZONE_DIR` → `wiki/incoming/` → auto search task → answer cites **`[E#]`** with correct amounts.
 8. Enable `GZMO_PROFILE=interactive` / GAH / DSJ only when clarification halts are desired.
 
+### G. Chaos / dreams (“art metabolism”) without Inbox floods
+
+1. [Profiles / safe modes](README.md#profiles--safe-modes) — use `GZMO_PROFILE=art`: pulse + dreams + self-ask stay on; wiki auto-consolidation off; `GZMO_AUTO_INBOX_*` defaults keep Thought Cabinet loops from spawning unsolicited Inbox thinks unless you opt in.
+2. Re-enable bridges when desired: `GZMO_AUTO_INBOX_FROM_SELF_ASK=on`, `GZMO_AUTO_INBOX_FROM_DREAMS=on`, `GZMO_AUTO_INBOX_FROM_WIKI_REPAIR=on`, or `GZMO_ENABLE_WIKI=on`.
+
 ---
 
 ## Minimal execution checklist (copy)

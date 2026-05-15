@@ -1,6 +1,6 @@
 import { readBoolEnv } from "./pipelines/helpers";
 
-export type GzmoProfileName = "heartbeat" | "minimal" | "standard" | "core" | "full" | "interactive";
+export type GzmoProfileName = "heartbeat" | "minimal" | "standard" | "core" | "full" | "interactive" | "art";
 
 export interface RuntimeProfile {
   name: GzmoProfileName;
@@ -27,6 +27,7 @@ function parseProfileName(raw?: string): GzmoProfileName {
   if (v === "core") return "core";
   if (v === "standard") return "standard";
   if (v === "interactive") return "interactive";
+  if (v === "art") return "art";
   return "full";
 }
 
@@ -98,6 +99,22 @@ export function defaultRuntimeProfile(name: GzmoProfileName): RuntimeProfile {
 
     case "interactive":
       return { ...defaultRuntimeProfile("core"), name: "interactive" };
+
+    case "art":
+      return {
+        name,
+        enableInboxWatcher: true,
+        enableTaskProcessing: true,
+        enableEmbeddingsInitialSync: true,
+        enableEmbeddingsLiveSync: true,
+        enableDreams: true,
+        enableSelfAsk: true,
+        enableWiki: false,
+        enableIngest: false,
+        enableWikiLint: false,
+        enablePruning: false,
+        enableDashboardPulse: true,
+      };
 
     case "full":
       return {

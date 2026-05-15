@@ -10,6 +10,12 @@ import { loadTrustState, trustLedgerEnabled } from "./learning/trust_ledger";
 import { loadLedger, learningEnabled } from "./learning/ledger";
 import { runSparkSelfCheckAsync, selfHelpPath } from "./spark_self_help";
 import { existsSync } from "fs";
+import {
+  readAutoInboxFromDreams,
+  readAutoInboxFromSelfAsk,
+  readAutoInboxFromWikiRepair,
+  maxAutoTasksPerHourDefault,
+} from "./pipelines/helpers";
 
 export function bootReportEnabled(): boolean {
   return readBoolEnv("GZMO_ENABLE_BOOT_REPORT", true);
@@ -50,6 +56,13 @@ export async function writeBootReport(vaultPath: string, extras?: Record<string,
     `- **Strategy ledger:** ${ledgerBlock}`,
     `- **Profile:** ${process.env.GZMO_PROFILE ?? "core"}`,
     `- **Model:** ${process.env.OLLAMA_MODEL ?? "?"}`,
+    "",
+    "**Auto-inbox gates** (effective after env defaults):",
+    "",
+    `- wiki repair → Inbox: **${readAutoInboxFromWikiRepair() ? "on" : "off"}** (\`GZMO_AUTO_INBOX_FROM_WIKI_REPAIR\`)`,
+    `- self-ask → Inbox: **${readAutoInboxFromSelfAsk() ? "on" : "off"}** (\`GZMO_AUTO_INBOX_FROM_SELF_ASK\`)`,
+    `- dreams → Inbox: **${readAutoInboxFromDreams() ? "on" : "off"}** (\`GZMO_AUTO_INBOX_FROM_DREAMS\`)`,
+    `- default auto-task cap/hour (if \`GZMO_AUTO_TASKS_PER_HOUR\` unset): **${maxAutoTasksPerHourDefault()}**`,
     "",
   ];
 

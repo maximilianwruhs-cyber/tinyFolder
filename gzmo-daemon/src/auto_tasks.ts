@@ -4,6 +4,7 @@ import * as crypto from "crypto";
 import { safeWriteText, atomicWriteJson } from "./vault_fs";
 import { parseStructuredNextActions } from "./structured";
 import type { InboxTaskType } from "./task_types";
+import { maxAutoTasksPerHourDefault, readIntEnv } from "./pipelines/helpers";
 
 
 
@@ -125,8 +126,13 @@ export async function createAutoInboxTasks(params: {
   const created: string[] = [];
   const skipped: string[] = [];
 
-  // Simple rate limit: at most N auto tasks per hour across all subsystems.
-  const MAX_PER_HOUR = 20;
+  // Rate limit: at most N auto tasks/hour (override with GZMO_AUTO_TASKS_PER_HOUR).
+  const MAX_PER_HOUR = readIntEnv(
+    "GZMO_AUTO_TASKS_PER_HOUR",
+    maxAutoTasksPerHourDefault(),
+    0,
+    120,
+  );
   const nowMs = Date.now();
   const createdAt = digest.createdAt ?? {};
   const recent = Object.values(createdAt).filter((iso) => {

@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "bun:test";
+import { describe, expect, it, test, afterEach, beforeEach } from "bun:test";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -47,6 +47,18 @@ describe("wikiSlugFromDropzoneInner", () => {
 });
 
 describe("nested dropzone ingest", () => {
+  let savedDrop: string | undefined;
+
+  beforeEach(() => {
+    savedDrop = process.env.GZMO_DROPZONE_DIR;
+    delete process.env.GZMO_DROPZONE_DIR;
+  });
+
+  afterEach(() => {
+    if (savedDrop === undefined) delete process.env.GZMO_DROPZONE_DIR;
+    else process.env.GZMO_DROPZONE_DIR = savedDrop;
+  });
+
   it("handleDropzoneFile processes file under nested customer path", async () => {
     const vault = await mkdtemp(join(tmpdir(), "gzmo-dz-nest-"));
     try {
