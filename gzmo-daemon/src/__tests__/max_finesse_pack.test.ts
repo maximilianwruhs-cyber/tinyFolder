@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { EmbeddingStore } from "../embeddings";
 import { bm25SearchVault, buildBm25Index } from "../bm25";
 import { searchVaultHybrid } from "../search";
@@ -9,9 +9,21 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
-const originalFetch = globalThis.fetch;
+const savedEnv: Record<string, string | undefined> = {};
+const ISOLATION_KEYS = ["GZMO_MULTIQUERY", "GZMO_RERANK_LLM", "GZMO_ANCHOR_PRIOR"];
+
+beforeEach(() => {
+  for (const k of ISOLATION_KEYS) savedEnv[k] = process.env[k];
+  // Force-disable LLM-dependent search paths; the fetch stub only serves embeddings.
+  process.env.GZMO_MULTIQUERY = "off";
+  process.env.GZMO_RERANK_LLM = "off";
+  process.env.GZMO_ANCHOR_PRIOR = "off";
+});
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  for (const k of ISOLATION_KEYS) {
+    if (savedEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedEnv[k];
+  }
 });
 
 function storeFixture(): EmbeddingStore {
@@ -64,9 +76,16 @@ describe("max finesse pack", () => {
   });
 
   test("searchVaultHybrid merges vector+lexical and diversifies files", async () => {
-    globalThis.fetch = (async () => new Response(JSON.stringify({ embedding: [1, 0] }), { status: 200 })) as unknown as typeof fetch;
+    // Isolate from env pollution: disable LLM-dependent paths that the fetch stub can't serve.
+    process.env.GZMO_MULTIQUERY = "off";
+    process.env.GZMO_RERANK_LLM = "off";
+    process.env.GZMO_ANCHOR_PRIOR = "off";
+    // Use DI for the fetch stub to avoid parallel test pollution
+    const stub = (async () => {
+      return new Response(JSON.stringify({ embedding: [1, 0] }), { status: 200 });
+    }) as unknown as typeof fetch;
     const store = storeFixture();
-    const results = await searchVaultHybrid("telemetry json path", store, "http://example.invalid", { topK: 2, perFileLimit: 1 });
+    const results = await searchVaultHybrid("telemetry json path", store, "http://example.invalid", { topK: 2, perFileLimit: 1, mode: "fast", fetchFn: stub });
     expect(results.length).toBe(2);
     expect(new Set(results.map((r) => r.file)).size).toBe(2);
     // index should be strongly dampened

@@ -1,5 +1,5 @@
 import type { Tool, ToolContext, ToolResult } from "./types";
-import { resolveVaultPath } from "../vault_fs";
+import { assertVaultFileNotSymlink, resolveVaultPath } from "../vault_fs";
 
 export const vaultReadTool: Tool = {
   name: "vault_read",
@@ -21,6 +21,7 @@ export const vaultReadTool: Tool = {
     }
     try {
       const { abs } = resolveVaultPath(ctx.vaultPath, rel);
+      await assertVaultFileNotSymlink(abs);
       const exists = await Bun.file(abs).exists();
       if (!exists) {
         return { ok: false, output: "", error: `File not found: ${rel}`, elapsed_ms: Date.now() - t0 };

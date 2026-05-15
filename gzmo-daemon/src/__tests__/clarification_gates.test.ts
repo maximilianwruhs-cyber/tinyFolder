@@ -137,10 +137,6 @@ describe("SearchPipeline.prepare GAH integration", () => {
     process.env.GZMO_GAH_MIN_SCORE = "0.25";
     process.env.GZMO_ENABLE_TOOLS = "off";
 
-    mock.module("../search", () => ({
-      searchVaultHybrid: async () => [],
-    }));
-
     const { SearchPipeline } = await import("../pipelines/search_pipeline");
     const inboxFile = join(vault, "GZMO/Inbox", "gah_test.md");
     writeFileSync(
@@ -172,10 +168,6 @@ describe("SearchPipeline.prepare GAH integration", () => {
   test("no haltReason when GAH off (regression)", async () => {
     saveEnv(["GZMO_ENABLE_GAH"]);
     process.env.GZMO_ENABLE_GAH = "off";
-
-    mock.module("../search", () => ({
-      searchVaultHybrid: async () => [],
-    }));
 
     const { SearchPipeline } = await import("../pipelines/search_pipeline");
     const inboxFile = join(vault, "GZMO/Inbox", "gah_off.md");

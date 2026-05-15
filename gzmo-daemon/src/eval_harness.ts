@@ -139,11 +139,13 @@ export async function runEvalHarness(): Promise<EvalResult> {
 
     // Stub embedding endpoint so hybrid search doesn't hit the network.
     // We vary the returned embedding by query to keep scenarios meaningful.
+    // We vary the returned embedding by query to keep scenarios meaningful.
+    // Use dependency injection to avoid mutating globalThis.fetch, which
+    // is highly unsafe in Bun's parallel test execution environment.
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (_url: any, init?: any) => {
+    const fetchStub = (async (_url: any, init?: any) => {
       try {
         const url = String(_url ?? "");
-        // Only stub embedding calls used by retrieval. Let other HTTP calls (LLM) proceed.
         if (!(url.includes("/embeddings") || url.includes("example.invalid"))) {
           return await originalFetch(_url as any, init);
         }
@@ -155,7 +157,7 @@ export async function runEvalHarness(): Promise<EvalResult> {
         if (prompt.toLowerCase().includes("telemetry")) return new Response(JSON.stringify({ embedding: [1, 0] }), { status: 200 });
       } catch {}
       return new Response(JSON.stringify({ embedding: [1, 0] }), { status: 200 });
-    }) as any;
+    }) as unknown as typeof fetch;
 
     type Scenario = {
       name: string;
@@ -205,7 +207,7 @@ export async function runEvalHarness(): Promise<EvalResult> {
       const [facts, state, retrieval] = await Promise.all([
         gatherLocalFacts({ vaultPath: vault, query: s.query }),
         gatherVaultStateIndex({ vaultPath: vault, query: s.query }),
-        searchVaultHybrid(s.query, store, "http://example.invalid", { topK: 4, perFileLimit: 1 }),
+        searchVaultHybrid(s.query, store, "http://example.invalid", { topK: 4, perFileLimit: 1, fetchFn: fetchStub }),
       ]);
 
       if (s.expectEmpty) {
@@ -335,7 +337,7 @@ export async function runEvalHarness(): Promise<EvalResult> {
         const parts = [];
         for (const p of required.parts) {
           const q = `Part ${p.idx}: ${p.text}`;
-          const results = await searchVaultHybrid(q, store, "http://example.invalid", { topK: 4, perFileLimit: 1, mode: "fast" });
+          const results = await searchVaultHybrid(q, store, "http://example.invalid", { topK: 4, perFileLimit: 1, mode: "fast", fetchFn: fetchStub });
           parts.push({ idx: p.idx, text: p.text, results });
         }
 
@@ -489,7 +491,7 @@ export async function runEvalHarness(): Promise<EvalResult> {
             const parts = [];
             for (const p of required.parts) {
               const q = `Part ${p.idx}: ${p.text}`;
-              const results = await searchVaultHybrid(q, store, "http://example.invalid", { topK: 4, perFileLimit: 1, mode: "fast", adaptiveTopKMode: "part" });
+              const results = await searchVaultHybrid(q, store, "http://example.invalid", { topK: 4, perFileLimit: 1, mode: "fast", adaptiveTopKMode: "part", fetchFn: fetchStub });
               parts.push({ idx: p.idx, text: p.text, results });
             }
             const packetMulti = compileEvidencePacketMulti({
@@ -617,8 +619,6 @@ export async function runEvalHarness(): Promise<EvalResult> {
         // non-fatal
       }
     }
-
-    globalThis.fetch = originalFetch;
 
     metrics.scenarioCount = scenarios.length;
     metrics.retrievalHitCount = hits;

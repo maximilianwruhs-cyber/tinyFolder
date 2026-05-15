@@ -37,7 +37,8 @@ import type {
 
 const API_VERSION = "0.4.0-api";
 
-const LOCAL_ONLY = readBoolEnv("GZMO_LOCAL_ONLY", false);
+// Default LOCAL_ONLY=1: loopback CORS + bind guard unless operator opts out.
+const LOCAL_ONLY = readBoolEnv("GZMO_LOCAL_ONLY", true);
 const API_HOST = process.env.GZMO_API_HOST?.trim() || "127.0.0.1";
 const API_PORT = readIntEnv("GZMO_API_PORT", 12700, 1024, 65535);
 const API_SOCKET = process.env.GZMO_API_SOCKET?.trim() || "";
@@ -54,6 +55,12 @@ const MAX_QUERY_CHARS = readIntEnv("GZMO_API_MAX_QUERY_CHARS", 10_000, 16, 1_000
 
 // S4: client-controlled `chain_next` writes to YAML; restrict to a safe filename.
 const CHAIN_NEXT_RE = /^[A-Za-z0-9._-]+\.md$/;
+
+// Client-supplied api_id is interpolated into YAML frontmatter — reject metacharacters.
+const API_ID_RE =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[a-zA-Z0-9][a-zA-Z0-9_-]{0,127})$/i;
+
+const API_ALLOW_INSECURE = readBoolEnv("GZMO_API_ALLOW_INSECURE", false);
 
 // S1/S2: loopback hostname allowlist for both bind validation and CORS origin parsing.
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
@@ -156,15 +163,27 @@ function badJson(req: Request): Response {
  * Response when not. /health is intentionally exempt so monitoring still works
  * without leaking the token, but every mutating route is protected.
  */
+function bearerTokenMatches(presented: string): boolean {
+  if (!presented || !API_TOKEN) return false;
+  const a = Buffer.from(presented, "utf8");
+  const b = Buffer.from(API_TOKEN, "utf8");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 function requireAuth(req: Request, pathname: string): Response | null {
-  if (!API_TOKEN) return null; // auth disabled
+  if (!API_TOKEN) return null; // auth disabled (blocked at startup unless ALLOW_INSECURE)
   if (req.method === "OPTIONS") return null; // CORS preflight
-  if (pathname === "/api/v1/health") return null;
   const header = req.headers.get("authorization") ?? "";
   const m = header.match(/^Bearer\s+(.+)$/i);
   const presented = m?.[1]?.trim() ?? "";
-  if (presented && presented === API_TOKEN) return null;
+  if (bearerTokenMatches(presented)) return null;
   return jsonResponse({ error: "Unauthorized" }, 401, req);
+}
+
+/** Visible for tests — validates client-supplied task ids before YAML interpolation. */
+export function validateApiId(id: string): boolean {
+  return API_ID_RE.test(id.trim());
 }
 
 /**
@@ -321,7 +340,6 @@ async function buildHealthResponse(vaultPath: string): Promise<ApiHealthResponse
     pending_tasks: pending,
     processing_tasks: processing,
     uptime_seconds: Math.round((Date.now() - startedAtMs) / 1000),
-    vault_path: vaultPath,
     vram_used_mb,
     vram_total_mb,
   };
@@ -419,6 +437,13 @@ async function handleTaskSubmit(req: Request): Promise<Response> {
   }
 
   const id = body.id?.trim() || crypto.randomUUID();
+  if (!validateApiId(id)) {
+    return jsonResponse(
+      { error: "id must be a UUID or alphanumeric token (1-128 chars; no newlines or YAML metacharacters)" },
+      400,
+      req,
+    );
+  }
   const vaultPath = resolveVaultPath();
   const inboxDir = ensureInboxDir(vaultPath);
 
@@ -576,12 +601,26 @@ export function startApiServer(opts?: StartApiServerOptions): Server<unknown> {
     );
   }
 
-  // S3: refuse to start a publicly-reachable API without auth. If the operator
-  // has bound to a non-loopback host AND turned LOCAL_ONLY off, require a token.
+  // S3: refuse to start without auth unless explicitly opted into insecure dev mode.
+  if (!API_TOKEN && !API_ALLOW_INSECURE) {
+    throw new Error(
+      `[API] Refusing to start: GZMO_API_TOKEN is not set. ` +
+        `Set GZMO_API_TOKEN to a strong shared secret (recommended even on 127.0.0.1). ` +
+        `For local dev/tests only, set GZMO_API_ALLOW_INSECURE=1.`,
+    );
+  }
+
+  // S3b: refuse publicly-reachable bind without token (even if ALLOW_INSECURE slipped through).
   if (!LOCAL_ONLY && !useSocket && !isLoopbackHost(API_HOST) && !API_TOKEN) {
     throw new Error(
       `[API] Refusing to start: GZMO_API_HOST=${API_HOST} is non-loopback and GZMO_API_TOKEN is not set. ` +
         `Set GZMO_API_TOKEN to a strong shared secret, enable GZMO_LOCAL_ONLY=1, or bind to loopback.`,
+    );
+  }
+
+  if (!LOCAL_ONLY && !useSocket && API_TOKEN) {
+    console.warn(
+      "[API] GZMO_LOCAL_ONLY=0 — CORS may reflect client Origin. Prefer GZMO_LOCAL_ONLY=1 for local-only use.",
     );
   }
 
@@ -601,7 +640,10 @@ export function startApiServer(opts?: StartApiServerOptions): Server<unknown> {
   const where = useSocket ? `unix:${API_SOCKET}` : `http://${API_HOST}:${API_PORT}`;
   console.log(`[API] Server listening at ${where}`);
   if (LOCAL_ONLY) console.log("[API] LOCAL_ONLY=1 — only loopback origins permitted by CORS.");
-  if (API_TOKEN) console.log("[API] Bearer auth enabled (GZMO_API_TOKEN set).");
+  if (API_TOKEN) console.log("[API] Bearer auth enabled (GZMO_API_TOKEN set; all routes including /health).");
+  if (API_ALLOW_INSECURE && !API_TOKEN) {
+    console.warn("[API] GZMO_API_ALLOW_INSECURE=1 — no Bearer token; any local process can call the API.");
+  }
   console.log("[API] Routes:");
   console.log("[API]   GET  /api/v1/health");
   console.log("[API]   POST /api/v1/task        (action: think|search|chain)");

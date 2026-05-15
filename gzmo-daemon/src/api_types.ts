@@ -102,7 +102,6 @@ export interface ApiHealthResponse {
   pending_tasks: number;
   processing_tasks: number;
   uptime_seconds: number;
-  vault_path?: string;
   vram_used_mb?: number;
   vram_total_mb?: number;
 }

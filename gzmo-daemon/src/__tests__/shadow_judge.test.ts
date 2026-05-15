@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseJudgeScore } from "../shadow_judge";
+import { parseJudgeScore } from "../judge_score_parser";
 
 describe("shadow_judge.parseJudgeScore", () => {
   test("parses SCORE and trace", () => {

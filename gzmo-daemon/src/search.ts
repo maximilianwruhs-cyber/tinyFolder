@@ -55,6 +55,8 @@ export interface SearchOptions {
   // If omitted, falls back to env defaults.
   adaptiveTopKMode?: "global" | "part";
   adaptiveTopK?: boolean;
+  // DI for testing to avoid global fetch pollution
+  fetchFn?: typeof fetch;
 }
 
 // BM25 index cache (store identity -> built index)
@@ -177,14 +179,15 @@ export async function searchVault(
     /(?:^|[\s`"'(])docs\/[A-Za-z0-9_\-./]+\.md(?=$|[\s`"'),.;:!?])/i.test(query);
 
   // Embed the query
-  const resp = await fetch(`${ollamaUrl}/api/embeddings`, {
+  const doFetch = opts.fetchFn ?? globalThis.fetch;
+  const resp = await doFetch(`${ollamaUrl}/api/embeddings`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: store.modelName, prompt: query }),
-  });
+  }).catch(() => null);
 
-  if (!resp.ok) {
-    console.warn(`[SEARCH] Embedding query failed: ${resp.status}`);
+  if (!resp || !resp.ok) {
+    console.warn(`[SEARCH] Embedding query failed: ${resp?.status}`);
     return [];
   }
 

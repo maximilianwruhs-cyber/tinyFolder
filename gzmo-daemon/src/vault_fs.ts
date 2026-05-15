@@ -10,9 +10,8 @@
  */
  
 import { dirname, relative, resolve, sep } from "path";
-import { mkdirSync, renameSync, writeFileSync } from "fs";
-import { mkdir, rename, stat, unlink } from "fs/promises";
-import { appendFile } from "fs/promises";
+import { lstatSync, mkdirSync, renameSync, writeFileSync } from "fs";
+import { appendFile, lstat, mkdir, rename, stat, unlink } from "fs/promises";
  
 export class VaultPathError extends Error {
   constructor(message: string) {
@@ -48,6 +47,21 @@ export function resolveVaultPath(vaultRoot: string, targetPath: string): { abs: 
   }
  
   return { abs: targetAbs, rel };
+}
+
+/** Reject symlinks so vault tools cannot read outside the vault via link tricks. */
+export async function assertVaultFileNotSymlink(abs: string): Promise<void> {
+  const st = await lstat(abs);
+  if (st.isSymbolicLink()) {
+    throw new VaultPathError(`Refusing symlink: ${abs}`);
+  }
+}
+
+export function assertVaultFileNotSymlinkSync(abs: string): void {
+  const st = lstatSync(abs);
+  if (st.isSymbolicLink()) {
+    throw new VaultPathError(`Refusing symlink: ${abs}`);
+  }
 }
  
 async function ensureParentDir(fileAbs: string): Promise<void> {

@@ -1,6 +1,7 @@
-import { readdirSync, statSync } from "fs";
+import { lstatSync, readdirSync } from "fs";
 import { join, relative, resolve } from "path";
 import type { Tool, ToolContext, ToolResult } from "./types";
+import { assertVaultFileNotSymlinkSync } from "../vault_fs";
 
 export const dirListTool: Tool = {
   name: "dir_list",
@@ -30,11 +31,18 @@ export const dirListTool: Tool = {
       const entries = readdirSync(d, { withFileTypes: true });
       for (const e of entries) {
         if (e.name.startsWith(".") || e.name === "node_modules") continue;
-        const rel = relative(vaultRoot, join(d, e.name));
-        const st = statSync(join(d, e.name));
+        const full = join(d, e.name);
+        try {
+          assertVaultFileNotSymlinkSync(full);
+        } catch {
+          continue;
+        }
+        const st = lstatSync(full);
+        if (st.isSymbolicLink()) continue;
+        const rel = relative(vaultRoot, full);
         const size = st.isFile() ? `${(st.size / 1024).toFixed(1)}KB` : "dir";
         lines.push(`${prefix}${e.name} (${size})`);
-        if (recursive && st.isDirectory()) walk(join(d, e.name), prefix + "  ");
+        if (recursive && st.isDirectory()) walk(full, prefix + "  ");
       }
     }
 

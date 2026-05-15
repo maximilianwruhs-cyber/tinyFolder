@@ -38,9 +38,16 @@ afterEach(() => {
   delete process.env.GZMO_API_TOKEN;
   delete process.env.GZMO_API_HOST;
   delete process.env.GZMO_LOCAL_ONLY;
+  delete process.env.GZMO_API_ALLOW_INSECURE;
   delete process.env.GZMO_API_MAX_BODY_BYTES;
   delete process.env.GZMO_API_MAX_QUERY_CHARS;
 });
+
+const TEST_API_TOKEN = "test-api-token";
+
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return { authorization: `Bearer ${TEST_API_TOKEN}`, ...extra };
+}
 
 /**
  * Spawn a fresh server on an ephemeral port. Re-imports `api_server` after
@@ -50,8 +57,13 @@ async function startTestServer(envOverrides: Record<string, string> = {}): Promi
   base: string;
   stop: () => void;
   clearRegistry: () => void;
+  token: string;
 }> {
-  Object.assign(process.env, envOverrides);
+  const defaults: Record<string, string> = {
+    GZMO_API_TOKEN: TEST_API_TOKEN,
+    GZMO_LOCAL_ONLY: "1",
+  };
+  Object.assign(process.env, defaults, envOverrides);
   // Bun caches dynamic imports per-URL — append a query string to bust the cache
   // so module-level reads of process.env take effect every test.
   const cacheBust = `?t=${Date.now()}_${Math.random()}`;
@@ -64,6 +76,7 @@ async function startTestServer(envOverrides: Record<string, string> = {}): Promi
   const server = mod2.startApiServer();
   mod._clearTaskRegistry?.();
   mod2._clearTaskRegistry?.();
+  const token = process.env.GZMO_API_TOKEN?.trim() || "";
   return {
     base: `http://127.0.0.1:${port}`,
     stop: () => server.stop(true),
@@ -71,6 +84,7 @@ async function startTestServer(envOverrides: Record<string, string> = {}): Promi
       mod._clearTaskRegistry?.();
       mod2._clearTaskRegistry?.();
     },
+    token,
   };
 }
 
@@ -78,13 +92,12 @@ describe("api_server: /health", () => {
   test("returns 200 with version + counts", async () => {
     const srv = await startTestServer();
     try {
-      const r = await fetch(`${srv.base}/api/v1/health`);
+      const r = await fetch(`${srv.base}/api/v1/health`, { headers: authHeaders() });
       expect(r.status).toBe(200);
-      const body = (await r.json()) as { version: string; pending_tasks: number; processing_tasks: number; vault_path?: string };
+      const body = (await r.json()) as { version: string; pending_tasks: number; processing_tasks: number };
       expect(body.version).toBeDefined();
       expect(body.pending_tasks).toBe(0);
       expect(body.processing_tasks).toBe(0);
-      expect(body.vault_path).toBe(tmpVault);
     } finally {
       srv.stop();
     }
@@ -97,7 +110,7 @@ describe("api_server: POST /task", () => {
     try {
       const r = await fetch(`${srv.base}/api/v1/task`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ action: "nope", body: "hi" }),
       });
       expect(r.status).toBe(400);
@@ -111,7 +124,7 @@ describe("api_server: POST /task", () => {
     try {
       const r = await fetch(`${srv.base}/api/v1/task`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ action: "think", body: "what time is it" }),
       });
       expect(r.status).toBe(202);
@@ -134,7 +147,7 @@ describe("api_server: POST /task", () => {
     try {
       const r = await fetch(`${srv.base}/api/v1/task`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ action: "chain", body: "next", chain_next: "../escape.md" }),
       });
       expect(r.status).toBe(400);
@@ -150,7 +163,7 @@ describe("api_server: POST /task", () => {
     try {
       const r = await fetch(`${srv.base}/api/v1/task`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ action: "chain", body: "x", chain_next: "ok.md\nstatus: completed" }),
       });
       expect(r.status).toBe(400);
@@ -164,7 +177,7 @@ describe("api_server: POST /task", () => {
     try {
       const r = await fetch(`${srv.base}/api/v1/task`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ action: "chain", body: "x", chain_next: "next-step_v2.md" }),
       });
       expect(r.status).toBe(202);
@@ -179,7 +192,7 @@ describe("api_server: POST /task", () => {
       const big = "x".repeat(4096);
       const r = await fetch(`${srv.base}/api/v1/task`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ action: "think", body: big }),
       });
       expect(r.status).toBe(413);
@@ -193,7 +206,7 @@ describe("api_server: GET /task/:id (polling)", () => {
   test("404 for unknown id", async () => {
     const srv = await startTestServer();
     try {
-      const r = await fetch(`${srv.base}/api/v1/task/does-not-exist`);
+      const r = await fetch(`${srv.base}/api/v1/task/does-not-exist`, { headers: authHeaders() });
       expect(r.status).toBe(404);
     } finally {
       srv.stop();
@@ -205,11 +218,11 @@ describe("api_server: GET /task/:id (polling)", () => {
     try {
       const sub = await fetch(`${srv.base}/api/v1/task`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ action: "think", body: "hello" }),
       });
       const submitted = (await sub.json()) as { id: string };
-      const r = await fetch(`${srv.base}/api/v1/task/${submitted.id}`);
+      const r = await fetch(`${srv.base}/api/v1/task/${submitted.id}`, { headers: authHeaders() });
       expect(r.status).toBe(200);
       const body = (await r.json()) as { id: string; status: string };
       expect(body.id).toBe(submitted.id);
@@ -227,7 +240,7 @@ describe("api_server: POST /search (async 202 contract)", () => {
     try {
       const r = await fetch(`${srv.base}/api/v1/search`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ query: "what is the meaning of life" }),
       });
       expect(r.status).toBe(202);
@@ -245,7 +258,7 @@ describe("api_server: POST /search (async 202 contract)", () => {
     try {
       const r = await fetch(`${srv.base}/api/v1/search`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ query: "  " }),
       });
       expect(r.status).toBe(400);
@@ -259,7 +272,7 @@ describe("api_server: POST /search (async 202 contract)", () => {
     try {
       const r = await fetch(`${srv.base}/api/v1/search`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ query: "x".repeat(64) }),
       });
       expect(r.status).toBe(413);
@@ -276,7 +289,7 @@ describe("api_server: GET /stream (SSE)", () => {
       // Open SSE first so we don't miss the event.
       const sseAbort = new AbortController();
       const ssePromise = (async () => {
-        const r = await fetch(`${srv.base}/api/v1/stream`, { signal: sseAbort.signal });
+        const r = await fetch(`${srv.base}/api/v1/stream`, { signal: sseAbort.signal, headers: authHeaders() });
         expect(r.status).toBe(200);
         expect(r.headers.get("content-type")).toContain("text/event-stream");
         const reader = r.body!.getReader();
@@ -297,7 +310,7 @@ describe("api_server: GET /stream (SSE)", () => {
 
       const sub = await fetch(`${srv.base}/api/v1/task`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ action: "think", body: "ping" }),
       });
       expect(sub.status).toBe(202);
@@ -340,11 +353,48 @@ describe("api_server: S3 bearer auth", () => {
     }
   });
 
-  test("/health is exempt so monitoring still works without the token", async () => {
+  test("/health requires Bearer when GZMO_API_TOKEN is set", async () => {
     const srv = await startTestServer({ GZMO_API_TOKEN: "supersecret" });
     try {
       const r = await fetch(`${srv.base}/api/v1/health`);
-      expect(r.status).toBe(200);
+      expect(r.status).toBe(401);
+      const ok = await fetch(`${srv.base}/api/v1/health`, {
+        headers: { authorization: "Bearer supersecret" },
+      });
+      expect(ok.status).toBe(200);
+    } finally {
+      srv.stop();
+    }
+  });
+});
+
+describe("api_server: api_id validation", () => {
+  test("rejects api_id with embedded newline (YAML break)", async () => {
+    const srv = await startTestServer();
+    try {
+      const r = await fetch(`${srv.base}/api/v1/task`, {
+        method: "POST",
+        headers: authHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ action: "think", body: "hi", id: "ok\nstatus: completed" }),
+      });
+      expect(r.status).toBe(400);
+    } finally {
+      srv.stop();
+    }
+  });
+
+  test("accepts UUID api_id", async () => {
+    const srv = await startTestServer();
+    try {
+      const id = "550e8400-e29b-41d4-a716-446655440000";
+      const r = await fetch(`${srv.base}/api/v1/task`, {
+        method: "POST",
+        headers: authHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ action: "think", body: "hi", id }),
+      });
+      expect(r.status).toBe(202);
+      const body = (await r.json()) as { id: string };
+      expect(body.id).toBe(id);
     } finally {
       srv.stop();
     }
@@ -355,20 +405,43 @@ describe("api_server: S1 boot guard", () => {
   test("startApiServer throws when LOCAL_ONLY=1 + GZMO_API_HOST is non-loopback", async () => {
     process.env.GZMO_LOCAL_ONLY = "1";
     process.env.GZMO_API_HOST = "0.0.0.0";
+    process.env.GZMO_API_TOKEN = TEST_API_TOKEN;
     process.env.GZMO_API_PORT = String(13000 + Math.floor(Math.random() * 5000));
     const cacheBust = `?bind=${Date.now()}_${Math.random()}`;
     const mod = (await import(`../api_server${cacheBust}`)) as typeof import("../api_server");
     expect(() => mod.startApiServer()).toThrow(/loopback/i);
   });
 
+  test("startApiServer throws when GZMO_API_TOKEN is unset", async () => {
+    delete process.env.GZMO_API_TOKEN;
+    delete process.env.GZMO_API_ALLOW_INSECURE;
+    process.env.GZMO_API_HOST = "127.0.0.1";
+    process.env.GZMO_API_PORT = String(13000 + Math.floor(Math.random() * 5000));
+    const cacheBust = `?notoken=${Date.now()}_${Math.random()}`;
+    const mod = (await import(`../api_server${cacheBust}`)) as typeof import("../api_server");
+    expect(() => mod.startApiServer()).toThrow(/GZMO_API_TOKEN/);
+  });
+
   test("startApiServer throws when public bind has no token", async () => {
-    delete process.env.GZMO_LOCAL_ONLY;
+    process.env.GZMO_LOCAL_ONLY = "0";
     process.env.GZMO_API_HOST = "0.0.0.0";
     delete process.env.GZMO_API_TOKEN;
+    delete process.env.GZMO_API_ALLOW_INSECURE;
     process.env.GZMO_API_PORT = String(13000 + Math.floor(Math.random() * 5000));
     const cacheBust = `?token=${Date.now()}_${Math.random()}`;
     const mod = (await import(`../api_server${cacheBust}`)) as typeof import("../api_server");
     expect(() => mod.startApiServer()).toThrow(/GZMO_API_TOKEN/);
+  });
+
+  test("startApiServer allows insecure mode when GZMO_API_ALLOW_INSECURE=1", async () => {
+    delete process.env.GZMO_API_TOKEN;
+    process.env.GZMO_API_ALLOW_INSECURE = "1";
+    process.env.GZMO_API_HOST = "127.0.0.1";
+    process.env.GZMO_API_PORT = String(13000 + Math.floor(Math.random() * 5000));
+    const cacheBust = `?insecure=${Date.now()}_${Math.random()}`;
+    const mod = (await import(`../api_server${cacheBust}`)) as typeof import("../api_server");
+    const server = mod.startApiServer();
+    server.stop(true);
   });
 });
 
@@ -377,7 +450,7 @@ describe("api_server: S2 CORS loopback parsing", () => {
     const srv = await startTestServer({ GZMO_LOCAL_ONLY: "1" });
     try {
       const r = await fetch(`${srv.base}/api/v1/health`, {
-        headers: { origin: "http://localhost.evil.com" },
+        headers: authHeaders({ origin: "http://localhost.evil.com" }),
       });
       // The previous startsWith bug would have echoed the attacker origin.
       const acao = r.headers.get("access-control-allow-origin") ?? "";
@@ -393,7 +466,7 @@ describe("api_server: S2 CORS loopback parsing", () => {
     const srv = await startTestServer({ GZMO_LOCAL_ONLY: "1" });
     try {
       const r = await fetch(`${srv.base}/api/v1/health`, {
-        headers: { origin: "http://127.0.0.1:5173" },
+        headers: authHeaders({ origin: "http://127.0.0.1:5173" }),
       });
       expect(r.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:5173");
     } finally {

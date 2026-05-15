@@ -1,6 +1,7 @@
-import { readFileSync, readdirSync } from "fs";
+import { lstatSync, readFileSync, readdirSync } from "fs";
 import { join, relative, resolve } from "path";
 import type { Tool, ToolContext, ToolResult } from "./types";
+import { assertVaultFileNotSymlinkSync } from "../vault_fs";
 
 export const fsGrepTool: Tool = {
   name: "fs_grep",
@@ -39,6 +40,13 @@ export const fsGrepTool: Tool = {
       const entries = readdirSync(dir, { withFileTypes: true });
       for (const e of entries) {
         const full = join(dir, e.name);
+        try {
+          assertVaultFileNotSymlinkSync(full);
+        } catch {
+          continue;
+        }
+        const lst = lstatSync(full);
+        if (lst.isSymbolicLink()) continue;
         if (e.isDirectory()) {
           if (!e.name.startsWith(".") && e.name !== "node_modules") walk(full);
         } else if (e.isFile() && /\.(md|ts|json)$/i.test(e.name)) {

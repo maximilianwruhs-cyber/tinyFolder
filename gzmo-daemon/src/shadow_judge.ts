@@ -1,5 +1,9 @@
 import { streamText } from "ai";
 import { inferByRole } from "./inference_router";
+import { parseJudgeScore } from "./judge_score_parser";
+
+// Re-export so existing importers don't break.
+export { parseJudgeScore } from "./judge_score_parser";
 
 export interface ShadowJudgeResult {
   score: number; // 0..1
@@ -30,20 +34,7 @@ function clamp(s: string, maxChars: number): string {
   return t.slice(0, maxChars) + "\n…";
 }
 
-export function parseJudgeScore(raw: string): { score: number; trace: string; parseOk: boolean } {
-  const text = String(raw ?? "");
-  const traceMatch = text.match(/<step-by-step-trace>([\s\S]*?)<\/step-by-step-trace>/i);
-  const trace = (traceMatch?.[1] ?? "").trim();
 
-  // Take the LAST SCORE occurrence to avoid being tricked by "SCORE:" strings inside the trace.
-  const matches = [...text.matchAll(/SCORE:\s*((?:0|1)(?:\.\d+)?)/gi)];
-  const last = matches[matches.length - 1];
-  if (!last) return { score: 0, trace, parseOk: false };
-  const n = Number.parseFloat(last[1] ?? "");
-  if (!Number.isFinite(n)) return { score: 0, trace, parseOk: false };
-  const score = Math.max(0, Math.min(1, n));
-  return { score, trace, parseOk: true };
-}
 
 export async function shadowJudge(params: {
   model?: any; // legacy: ignored when model routing is on; use inferByRole("judge") internally
