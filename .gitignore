@@ -13,6 +13,9 @@
 # env files
 **/.env
 **/.env.*
+# Tracked templates (exceptions must follow the ignores above).
+!gzmo-daemon/.env.example
+!gzmo-daemon/.env.spark.example
 
 # python venvs (used for maintenance tooling)
 .venv*/
