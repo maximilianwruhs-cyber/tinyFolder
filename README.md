@@ -4,8 +4,11 @@ GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `searc
 
 | Machine | Inference model | Profile | Config template |
 |---------|-----------------|---------|-----------------|
-| Laptop / small GPU | `hermes3:8b` (wizard default) | `core` | [`gzmo-daemon/.env.example`](gzmo-daemon/.env.example) |
-| **NVIDIA DGX Spark** (128 GB) | `qwen3.6:35b-a3b-nvfp4` | `core` | [`gzmo-daemon/.env.spark.example`](gzmo-daemon/.env.spark.example) |
+| Laptop / small GPU (≈ **4–8 GB** VRAM) | `hermes3:8b` (wizard default) | `core` | [`gzmo-daemon/.env.example`](gzmo-daemon/.env.example) |
+| Workstation (≈ **≥24 GB** VRAM, non-Blackwell) | **`qwen3.6:35b-a3b`** (Q4, ~24 GB in Ollama) | `core` | [`gzmo-daemon/.env.example`](gzmo-daemon/.env.example) |
+| **NVIDIA Blackwell** (DGX Spark GB10, RTX 50xx, RTX PRO Blackwell — [Ollama GPU list](https://docs.ollama.com/gpu)) | **`qwen3.6:35b-a3b-nvfp4`** (~22 GB — **best overall** in this stack) | `core` | [`gzmo-daemon/.env.spark.example`](gzmo-daemon/.env.spark.example) |
+
+**Reference chat model:** **`qwen3.6:35b-a3b-nvfp4`** is the strongest default we target for document RAG + long context when your driver/GPU supports the NVFP4 tag. If `ollama pull` or runtime rejects NVFP4, use the **same generation** [`qwen3.6:35b-a3b`](https://ollama.com/library/qwen3.6:35b-a3b) on a **≥24 GB** VRAM GPU (see [Prerequisites — Recommended models](#recommended-models)). Smaller GPUs use the **largest row that fits** in the VRAM table there — not this flagship.
 
 Agent checklist: [`AGENTS.md`](AGENTS.md).
 
@@ -65,7 +68,7 @@ bun install
 # Or interactive: ./scripts/onboard.sh
 ```
 
-The wizard supports everything from CPU-only laptops up to the **NVIDIA DGX Spark** (128GB unified memory). On Spark-class hardware it auto-selects **`qwen3.6:35b-a3b-nvfp4`** (Blackwell FP4) when available, else **`qwen3.6:35b-a3b`** or **`qwen3:32b`** — matching [NVIDIA’s DGX Spark playbook](https://build.nvidia.com/spark/cli-coding-agent).
+The wizard supports everything from CPU-only laptops up to **NVIDIA DGX Spark** (128 GB unified memory). It prefers **`qwen3.6:35b-a3b-nvfp4`** when the host can run that tag (Blackwell / compute **12.0+** per [Ollama hardware support](https://docs.ollama.com/gpu)), otherwise **`qwen3.6:35b-a3b`** if VRAM allows (~24 GB model weights), then **`qwen3:32b`** (~20 GB) or smaller — consistent with [NVIDIA’s DGX Spark playbook](https://build.nvidia.com/spark/cli-coding-agent).
 
 Or get **stack + wizard** in one command (Bun/Ollama/models, then onboard): `./scripts/setup.sh human` — see [Which installer?](#which-installer-human-vs-agent).
 
@@ -145,6 +148,8 @@ cd .. && ./install_service.sh && systemctl --user daemon-reload && systemctl --u
 Context is **not one knob**. Ollama’s KV cache (how much the model *can* remember) and GZMO’s retrieval/evidence budget (how much vault text is *injected* per task) are separate. On Spark you can max out the **Ollama** side without stress; **GZMO** still needs the evidence/output knobs for bill-quality answers.
 
 #### Memory budget (re-evaluated for `qwen3.6:35b-a3b-nvfp4`)
+
+**Non-Spark GPUs:** the same Qwen 3.6 line uses about **24 GB** for [`qwen3.6:35b-a3b`](https://ollama.com/library/qwen3.6:35b-a3b) (Q4) when NVFP4 is unavailable; smaller VRAM budgets use other rows in [Recommended models](#recommended-models).
 
 | Component | Typical size | Notes |
 |-----------|--------------|--------|
@@ -255,7 +260,7 @@ If you want this to be **repeatable** on a brand-new Ubuntu box (or a wiped dev 
 Prereqs you still must install yourself:
 
 - **Bun**
-- **Ollama** — pull models for your hardware (`hermes3:8b` + `nomic-embed-text` on laptops; **DGX Spark**: wizard or agent bootstrap pulls **`qwen3.6:35b-a3b-nvfp4`**)
+- **Ollama** — pull models for your hardware (`hermes3:8b` + `nomic-embed-text` on laptops; **≥24 GB** single-GPU: **`qwen3.6:35b-a3b`**; **Blackwell / DGX Spark**: **`qwen3.6:35b-a3b-nvfp4`** — see [Recommended models](#recommended-models))
 
 Bootstrap (vault scaffold + `.env` + bun deps; on Spark also sets **desktop Dropzone** + document RAG knobs):
 
@@ -337,26 +342,38 @@ This project is maintained for **Ubuntu Linux** (and similar distros with **syst
 
 ### Recommended models
 
-**Laptop / dev default:** `hermes3:8b` + `nomic-embed-text`.
+#### Reference vs code default
 
-**DGX Spark (128 GB unified):** [NVIDIA’s playbook](https://build.nvidia.com/spark/cli-coding-agent) — **`qwen3.6:35b-a3b-nvfp4`** (~22 GB weights, **256k** context with headroom). Avoid dense **70B–72B** models here; they waste memory without better document RAG for this use case.
+- **Best overall (when supported):** **`qwen3.6:35b-a3b-nvfp4`** — Qwen 3.6 MoE, NVFP4 weights (~**22 GB** in Ollama). Use on **NVIDIA Blackwell** GPUs (compute **12.0+**: DGX Spark **GB10**, GeForce **RTX 50xx**, **RTX PRO Blackwell**, etc. — see [Ollama — hardware support](https://docs.ollama.com/gpu)). This is the variant we optimize for on Spark (256k context + document RAG knobs in [`.env.spark.example`](gzmo-daemon/.env.spark.example)).
+- **Same generation, no NVFP4 path:** **`qwen3.6:35b-a3b`** — Q4_K_M in Ollama (~**24 GB**). Pick this on strong **Ada / Ampere** cards (≈**24 GB** VRAM or large UMA) when NVFP4 is unavailable.
+- **Code default if `OLLAMA_MODEL` is unset:** `hermes3:8b` (see `loadConfig()` in `gzmo-daemon/src/config.ts`) so a fresh clone does not assume 24 GB VRAM. **Set `OLLAMA_MODEL` explicitly** on bigger hardware.
 
-| Hardware | Chat model | Embeddings | Notes |
-|---|---|---|---|
-| CPU-only laptop | `phi3:mini` or `qwen2.5:0.5b` | `nomic-embed-text` | Wizard auto-picks |
-| 4–8 GB VRAM | `hermes3:8b` or `qwen2.5:7b` | `nomic-embed-text` | |
-| 16–24 GB VRAM | `qwen3:32b` or `deepseek-r1:14b` | `nomic-embed-text` | |
-| 48–80 GB VRAM | `qwen3:32b` | `nomic-embed-text` or `qwen3-embedding:4b` | Prefer Qwen3 over legacy 70B |
-| **DGX Spark** | **`qwen3.6:35b-a3b-nvfp4`** | `nomic-embed-text` (optional **`qwen3-embedding:4b`**) | See [`.env.spark.example`](gzmo-daemon/.env.spark.example) |
+Weight sizes below are **model weights only** from the Ollama library; add **KV cache**, OS, and (if loaded) **`nomic-embed-text`** / **`qwen3-embedding:4b`**. Choose the **largest tier that still leaves headroom** for your typical `OLLAMA_CONTEXT_LENGTH`.
+
+| VRAM budget (chat model + headroom) | Primary `OLLAMA_MODEL` | Alternatives | Notes |
+|-------------------------------------|------------------------|--------------|--------|
+| CPU / iGPU only | `phi3:mini`, `qwen2.5:0.5b` | — | Wizard auto-picks |
+| **4–8 GB** | `hermes3:8b` | `qwen2.5:7b` | Repo “laptop / small GPU” default |
+| **10–14 GB** | `qwen2.5:14b` | `deepseek-r1:14b` | Better reasoning than 8B; confirm size with `ollama show` |
+| **16–22 GB** | `qwen3:32b` | `qwen2.5:14b` if you need margin | [`qwen3:32b`](https://ollama.com/library/qwen3:32b) lists ~**20 GB** Q4 — previous-gen Qwen3 **dense** |
+| **≥24 GB** (no NVFP4) | **`qwen3.6:35b-a3b`** | — | [`qwen3.6:35b-a3b`](https://ollama.com/library/qwen3.6:35b-a3b) ~**24 GB** Q4 — same family as the NVFP4 flagship |
+| **Blackwell NVFP4** | **`qwen3.6:35b-a3b-nvfp4`** | `qwen3.6:35b-a3b` if NVFP4 fails | [`~22 GB`](https://ollama.com/library/qwen3.6:35b-a3b-nvfp4); **preferred** when the tag runs |
+| **48 GB+** | `qwen3.6:35b-a3b-nvfp4` or `qwen3.6:35b-a3b` | `qwen3-embedding:4b` alongside | Prefer **Qwen 3.6** over legacy **dense 70B–72B** for this repo’s ingest + `[E#]` RAG unless you explicitly need them |
+
+**Embeddings:** `nomic-embed-text` everywhere by default; optional **`qwen3-embedding:4b`** when you have spare VRAM ([Spark template](gzmo-daemon/.env.spark.example)).
 
 Pull sets:
 
 ```bash
-# Laptop
+# Laptop / 4–8 GB class
 ollama pull hermes3:8b
 ollama pull nomic-embed-text
 
-# DGX Spark
+# Single GPU ≈24 GB (no NVFP4) — same Qwen 3.6 family as flagship
+ollama pull qwen3.6:35b-a3b
+ollama pull nomic-embed-text
+
+# DGX Spark / Blackwell NVFP4 (preferred when supported)
 ollama pull qwen3.6:35b-a3b-nvfp4
 ollama pull nomic-embed-text
 # optional: ollama pull qwen3-embedding:4b
@@ -429,7 +446,9 @@ GZMO_PROFILE="core"
 GZMO_EMBED_MODEL="nomic-embed-text"
 ```
 
-**DGX Spark:** copy [`gzmo-daemon/.env.spark.example`](gzmo-daemon/.env.spark.example) → `.env` (includes `GZMO_DROPZONE_DIR`, document RAG knobs, `qwen3.6:35b-a3b-nvfp4`).
+**DGX Spark / Blackwell:** copy [`gzmo-daemon/.env.spark.example`](gzmo-daemon/.env.spark.example) → `.env` (includes `GZMO_DROPZONE_DIR`, document RAG knobs, `qwen3.6:35b-a3b-nvfp4`).
+
+**Other workstation (e.g. RTX 4090 24 GB):** start from [`.env.example`](gzmo-daemon/.env.example) and set `OLLAMA_MODEL="qwen3.6:35b-a3b"` (or `"qwen3.6:35b-a3b-nvfp4"` on RTX 50xx if the tag loads). See [Recommended models](#recommended-models).
 
 ### Clean boot (systemd helper env)
 
@@ -441,7 +460,7 @@ The installed user unit runs `scripts/wait-for-ollama.sh` before the daemon so O
 ### Core runtime knobs
 
 - **`OLLAMA_URL`**: base URL for Ollama (default: `http://localhost:11434`)
-- **`OLLAMA_MODEL`**: model tag for inference (default: `hermes3:8b`)
+- **`OLLAMA_MODEL`**: model tag for inference (code default: `hermes3:8b` when unset). **Quality reference:** **`qwen3.6:35b-a3b-nvfp4`** on supported Blackwell hardware, else **`qwen3.6:35b-a3b`** on ≈24 GB+ GPUs — see [Recommended models](#recommended-models).
 - **`GZMO_PROFILE`**: runtime profile / safe mode selector (see [Profiles / safe modes](#profiles--safe-modes))
 
 ### Retrieval quality knobs (defaults are set at runtime if unset)
@@ -954,8 +973,8 @@ For ToT / latency methodology (benchmark harness), see [`docs/PERFORMANCE_BASELI
 
 | Document | Purpose |
 |----------|---------|
-| [`gzmo-daemon/.env.spark.example`](gzmo-daemon/.env.spark.example) | **DGX Spark** reference `.env` (Qwen 3.6, Dropzone, RAG knobs) |
-| [`gzmo-daemon/.env.example`](gzmo-daemon/.env.example) | Laptop / generic `.env` template |
+| [`gzmo-daemon/.env.spark.example`](gzmo-daemon/.env.spark.example) | **Blackwell / DGX Spark** — `qwen3.6:35b-a3b-nvfp4`, Dropzone, RAG knobs |
+| [`gzmo-daemon/.env.example`](gzmo-daemon/.env.example) | Laptop / generic template (`hermes3:8b`; comments for `qwen3.6:35b-a3b` on ≥24 GB) |
 | [`scripts/lib/dgx-spark.sh`](scripts/lib/dgx-spark.sh) | Shared Spark detection + env snippets for installers |
 | [`docs/TROUBLESHOOTING_SPARK.md`](docs/TROUBLESHOOTING_SPARK.md) | **DGX Spark** failure → fix matrix (Ollama, Qwen 3.6, GZMO, links) |
 | [`docs/FINE_TUNING.md`](docs/FINE_TUNING.md) | Inference quality: prompts, LoRA, Modelfiles, Ollama import |

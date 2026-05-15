@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # agentic-setup.sh — Idempotent bootstrap for automation/CI.
 #
+# Default OLLAMA_MODEL is hermes3:8b unless DGX Spark (qwen3.6 nvfp4) is detected.
+# Override with --ollama-model or set after bootstrap per README → Recommended models.
+#
 # Performs:
 # - Create the vault scaffold.
 # - Write `gzmo-daemon/.env` (or overwrite with `--force-env`).
@@ -96,6 +99,10 @@ fi
 if detect_dgx_spark; then
   echo "agentic-setup: DGX Spark detected — pulling Qwen 3.6 MoE default" >&2
   ollama_model="$(pull_spark_default_model)"
+  ollama pull nomic-embed-text || true
+elif WS_MODEL="$(pull_workstation_qwen36_model 2>/dev/null || true)" && [[ -n "${WS_MODEL:-}" ]]; then
+  echo "agentic-setup: ≥24 GB VRAM — using $WS_MODEL" >&2
+  ollama_model="$WS_MODEL"
   ollama pull nomic-embed-text || true
 fi
 if [[ -n "$dropzone_dir" ]]; then

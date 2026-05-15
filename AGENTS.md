@@ -12,7 +12,8 @@ This file is the **control tower** for coding agents. It states non‑negotiable
 | **Integration** | **Filesystem inbox is the contract** — tasks are Markdown under `$VAULT_PATH/GZMO/Inbox/` with YAML frontmatter (`status`, `action`, …). An optional HTTP layer only **mirrors** those files into the same Inbox (see README HTTP API); there is no separate task queue API. |
 | **`VAULT_PATH`** | Must be an **absolute** path in `gzmo-daemon/.env`. |
 | **Dropzone** | Physical drops: **`GZMO_DROPZONE_DIR`** (e.g. `~/Schreibtisch/GZMO-Dropzone`). Vault may live elsewhere. |
-| **DGX Spark default** | Inference: **`qwen3.6:35b-a3b-nvfp4`** · Profile: **`core`** · Template: [`gzmo-daemon/.env.spark.example`](gzmo-daemon/.env.spark.example) · Ollama ctx: **262144** via [`scripts/start-ollama-optimized.sh`](scripts/start-ollama-optimized.sh). |
+| **Inference models** | **Best overall:** **`qwen3.6:35b-a3b-nvfp4`** (Blackwell / compute **12.0+**). **Fallback same gen:** **`qwen3.6:35b-a3b`** (≈**24 GB** Q4, ≥24 GB VRAM). **Code default if unset:** `hermes3:8b` (4–8 GB). Full VRAM table: [README — Recommended models](README.md#recommended-models). |
+| **DGX Spark** | Template: [`.env.spark.example`](gzmo-daemon/.env.spark.example) · Profile **`core`** · Ollama ctx **262144** via [`scripts/start-ollama-optimized.sh`](scripts/start-ollama-optimized.sh). |
 | **Line endings** | Repo shell scripts are **LF**. If `install_service.sh` fails with `bash\r`, run: `sed -i 's/\r$//' install_service.sh scripts/*.sh`. |
 | **User systemd unit** | Must **not** contain `User=%u` (causes **216/GROUP**). Regenerate with `./install_service.sh`. |
 
@@ -33,7 +34,7 @@ Use [README.md — Table of contents](README.md#table-of-contents) as the canoni
 | Repeatable fresh-machine setup | [Fresh machine agentic bootstrap](README.md#fresh-machine-agentic-bootstrap-recommended) |
 | Doctor / readiness wrapper | [Doctor (agentic readiness)](README.md#doctor-agentic-readiness) |
 | How tasks work (mental model) | [Mental model](README.md#mental-model) |
-| Bun, Ollama, models | [Prerequisites](README.md#prerequisites) |
+| Bun, Ollama, models | [Prerequisites](README.md#prerequisites) → [Recommended models](README.md#recommended-models) |
 | `bun install` | [Install](README.md#install) |
 | Directory layout | [Create a vault scaffold](README.md#create-a-vault-scaffold) |
 | `.env` and all env knobs | [Configure (environment variables)](README.md#configure-environment-variables) |
@@ -139,7 +140,7 @@ Use this as a **order-of-operations** reminder; details and commands live in REA
 
 - [ ] `curl -sf "${OLLAMA_URL:-http://localhost:11434}/api/tags"` succeeds (or fix Ollama).
 - [ ] **Ollama:** `./scripts/start-ollama-optimized.sh` (Spark: confirm `OLLAMA_CONTEXT_LENGTH=262144` in logs).
-- [ ] `ollama pull` for `OLLAMA_MODEL` + `GZMO_EMBED_MODEL` (defaults: laptop `hermes3:8b` + `nomic-embed-text`; **Spark** `qwen3.6:35b-a3b-nvfp4` + `nomic-embed-text`).
+- [ ] `ollama pull` for `OLLAMA_MODEL` + `GZMO_EMBED_MODEL` per [VRAM tier](README.md#recommended-models): laptop **`hermes3:8b`**; workstation **≥24 GB** **`qwen3.6:35b-a3b`**; Blackwell / Spark **`qwen3.6:35b-a3b-nvfp4`**; always **`nomic-embed-text`**.
 - [ ] `cd gzmo-daemon && bun install`
 - [ ] `gzmo-daemon/.env`: copy from [`.env.example`](gzmo-daemon/.env.example); absolute `VAULT_PATH`; `GZMO_PROFILE=core` unless you intentionally use `art`/`interactive`; `OLLAMA_*`; optional `GZMO_DROPZONE_DIR` (**Spark:** copy [`.env.spark.example`](gzmo-daemon/.env.spark.example)).
 - [ ] Document RAG on Spark: `GZMO_TOPK=12`, `GZMO_EVIDENCE_MAX_*`, `GZMO_LLM_MAX_TOKENS=2048` (bootstrap writes these on Spark).
@@ -158,7 +159,7 @@ Full Spark matrix: **[`docs/TROUBLESHOOTING_SPARK.md`](docs/TROUBLESHOOTING_SPAR
 - **Embedding 404 in logs:** missing **`GZMO_EMBED_MODEL`** (default `nomic-embed-text`) — `ollama pull` that tag.
 - **Empty or `!!!!!` answers:** thinking mode or bad **nvfp4** variant — see TROUBLESHOOTING_SPARK (use `qwen3.6:35b-a3b-nvfp4`, not `*-coding-nvfp4`; run `2+2` sanity test).
 - **Weak bill answers on Spark:** raise **`GZMO_TOPK` / `GZMO_EVIDENCE_MAX_*` / `GZMO_LLM_MAX_TOKENS`** — Ollama 256k context alone does not inject more vault text.
-- **Wrong model on Spark:** wizard should pick **`qwen3.6:35b-a3b-nvfp4`**, not `qwen2.5:72b` — see [`.env.spark.example`](gzmo-daemon/.env.spark.example).
+- **Wrong model on big hardware:** prefer **`qwen3.6:35b-a3b-nvfp4`** (Blackwell) or **`qwen3.6:35b-a3b`** (≥24 GB), not legacy **`qwen2.5:72b`** / dense **70B** — see [Recommended models](README.md#recommended-models) and [`.env.spark.example`](gzmo-daemon/.env.spark.example).
 - **UMA memory pressure on Spark:** `drop_caches` per NVIDIA playbook — TROUBLESHOOTING_SPARK.
 - **ExecStartPre timeout:** raise `GZMO_OLLAMA_WAIT_MAX_SEC` or set `GZMO_SYSTEMD_WAIT_FOR_OLLAMA=0` (see README Configure).
 - **`install_service` / `env` errors:** CRLF on scripts — see Non‑negotiables.

@@ -6,7 +6,7 @@ Thank you for improving GZMO. This project targets **Ubuntu Linux** with **Bun**
 
 1. Install [Bun](https://bun.sh) and [Ollama](https://ollama.com).
 2. `cd gzmo-daemon && bun install`
-3. Copy `gzmo-daemon/.env.example` → `.env` and set an **absolute** `VAULT_PATH`.
+3. Copy `gzmo-daemon/.env.example` → `.env` (or `.env.spark.example` on DGX Spark / Blackwell) and set an **absolute** `VAULT_PATH` plus **`OLLAMA_MODEL`** for your VRAM tier — see [README — Recommended models](README.md#recommended-models).
 4. Run the daemon: `bun run summon` (foreground) or use `./install_service.sh` for systemd.
 
 See [README.md](README.md) and [AGENTS.md](AGENTS.md) for full playbooks.

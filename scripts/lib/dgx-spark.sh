@@ -26,6 +26,37 @@ default_desktop_dropzone_dir() {
   echo "$home/GZMO-Dropzone"
 }
 
+# Total VRAM (MiB) for GPU 0, or 0 when nvidia-smi is unavailable.
+nvidia_vram_mib() {
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo 0
+    return 0
+  fi
+  local mib
+  mib="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -d ' MiBGB' || true)"
+  if [[ -n "${mib:-}" ]] && [[ "${mib:-0}" -gt 0 ]] 2>/dev/null; then
+    echo "$mib"
+  else
+    echo 0
+  fi
+}
+
+# Best-effort Qwen 3.6 MoE on ≈24 GB+ discrete GPUs (not Spark). Echoes tag or empty.
+pull_workstation_qwen36_model() {
+  local vram
+  vram="$(nvidia_vram_mib)"
+  if detect_dgx_spark; then
+    return 0
+  fi
+  if [[ "${vram:-0}" -lt 24000 ]] 2>/dev/null; then
+    return 0
+  fi
+  local tag="qwen3.6:35b-a3b"
+  if ollama pull "$tag" 2>/dev/null; then
+    echo "$tag"
+  fi
+}
+
 pull_spark_default_model() {
   local tag="qwen3.6:35b-a3b-nvfp4"
   if ollama pull "$tag" 2>/dev/null; then

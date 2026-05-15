@@ -443,7 +443,7 @@ PARAMETER num_ctx 8192
 
 | Item | Value |
 |------|--------|
-| Chat | `qwen3.6:35b-a3b-nvfp4` ([NVIDIA playbook](https://build.nvidia.com/spark/cli-coding-agent)) |
+| Chat | **`qwen3.6:35b-a3b-nvfp4`** on Blackwell ([NVIDIA playbook](https://build.nvidia.com/spark/cli-coding-agent)); else **`qwen3.6:35b-a3b`** on ≈24 GB+ GPUs — [README — Recommended models](../README.md#recommended-models) |
 | Context | `OLLAMA_CONTEXT_LENGTH=262144` via `./scripts/start-ollama-optimized.sh` |
 | Profile | `GZMO_PROFILE=core` |
 | Dropzone | `GZMO_DROPZONE_DIR=~/Schreibtisch/GZMO-Dropzone` (or `~/Desktop/...`) |
@@ -490,7 +490,8 @@ Expected memory: ~90–100GB during training. Remaining ~28GB handles OS + Ollam
 
 | Model | Use | Fits? |
 |-------|-----|-------|
-| **Qwen 3.6 35B-A3B nvfp4** | **GZMO inference (default)** | ✅ ~22 GB weights, 256k ctx |
+| **Qwen 3.6 35B-A3B nvfp4** | **GZMO inference (best overall, Blackwell)** | ✅ ~22 GB weights, 256k ctx |
+| **Qwen 3.6 35B-A3B Q4** | **GZMO inference (≥24 GB, no NVFP4)** | ✅ ~24 GB — same generation as nvfp4 |
 | Qwen 3.6 35B-A3B BF16 | Inference (not recommended) | ⚠️ ~70 GB weights — little KV headroom |
 | Llama 3.3 70B | Q-LoRA training (r=128) | ✅ Yes |
 | Qwen 2.5 72B | Q-LoRA training (legacy) | ✅ Yes — prefer Qwen 3.6 for inference |

@@ -63,7 +63,7 @@ const TIERS: ModelTier[] = [
     name: "Hermes 3 8B (default)",
     minVramMiB: 4 * 1024,
     minRamMiB: 8 * 1024,
-    notes: "GZMO default. Excellent tool-use and reasoning for its size.",
+    notes: "Code default when OLLAMA_MODEL unset (~4–8 GB). Good tool-use for its size.",
   },
   {
     id: "llama3.1:8b",
@@ -112,14 +112,14 @@ const TIERS: ModelTier[] = [
     name: "Qwen 3.6 35B-A3B (MoE)",
     minVramMiB: 24 * 1024,
     minRamMiB: 32 * 1024,
-    notes: "NVIDIA DGX Spark playbook default (MoE). ~24 GB; 256K context.",
+    notes: "Qwen 3.6 MoE Q4 (~24 GB). Best on ≥24 GB VRAM when NVFP4 unavailable.",
   },
   {
     id: "qwen3.6:35b-a3b-nvfp4",
     name: "Qwen 3.6 35B-A3B NVFP4",
     minVramMiB: 22 * 1024,
     minRamMiB: 32 * 1024,
-    notes: "Blackwell/GB10 FP4 build (~22 GB). Best default on DGX Spark when available.",
+    notes: "Best overall in GZMO stack (~22 GB). Blackwell / DGX Spark GB10 / RTX 50xx when tag runs.",
   },
   {
     id: "llama3.1:70b",

@@ -109,24 +109,48 @@ case "$PROFILE" in
     ROUTING="off"
     ;;
   standard)
-    ollama pull qwen3:32b || true
-    ollama pull nomic-embed-text || true
-    ollama pull qwen2.5:0.5b || true
-    MODEL="qwen3:32b"
-    FAST_MODEL="qwen2.5:0.5b"
-    REASON_MODEL="qwen3:32b"
-    JUDGE_MODEL="qwen3:32b"
-    ROUTING="on"
+    WS_MODEL="$(pull_workstation_qwen36_model || true)"
+    if [[ -n "${WS_MODEL:-}" ]]; then
+      echo "       ≥24 GB VRAM — using Qwen 3.6 MoE ($WS_MODEL)"
+      ollama pull nomic-embed-text || true
+      ollama pull qwen2.5:0.5b || true
+      MODEL="$WS_MODEL"
+      FAST_MODEL="qwen2.5:0.5b"
+      REASON_MODEL="$WS_MODEL"
+      JUDGE_MODEL="$WS_MODEL"
+      ROUTING="on"
+    else
+      ollama pull qwen3:32b || true
+      ollama pull nomic-embed-text || true
+      ollama pull qwen2.5:0.5b || true
+      MODEL="qwen3:32b"
+      FAST_MODEL="qwen2.5:0.5b"
+      REASON_MODEL="qwen3:32b"
+      JUDGE_MODEL="qwen3:32b"
+      ROUTING="on"
+    fi
     ;;
   full)
-    ollama pull qwen3:32b || true
-    ollama pull nomic-embed-text || true
-    ollama pull qwen2.5:0.5b || true
-    MODEL="qwen3:32b"
-    FAST_MODEL="qwen2.5:0.5b"
-    REASON_MODEL="qwen3:32b"
-    JUDGE_MODEL="qwen3:32b"
-    ROUTING="on"
+    WS_MODEL="$(pull_workstation_qwen36_model || true)"
+    if [[ -n "${WS_MODEL:-}" ]]; then
+      echo "       ≥24 GB VRAM — using Qwen 3.6 MoE ($WS_MODEL)"
+      ollama pull nomic-embed-text || true
+      ollama pull qwen2.5:0.5b || true
+      MODEL="$WS_MODEL"
+      FAST_MODEL="qwen2.5:0.5b"
+      REASON_MODEL="$WS_MODEL"
+      JUDGE_MODEL="$WS_MODEL"
+      ROUTING="on"
+    else
+      ollama pull qwen3:32b || true
+      ollama pull nomic-embed-text || true
+      ollama pull qwen2.5:0.5b || true
+      MODEL="qwen3:32b"
+      FAST_MODEL="qwen2.5:0.5b"
+      REASON_MODEL="qwen3:32b"
+      JUDGE_MODEL="qwen3:32b"
+      ROUTING="on"
+    fi
     ;;
   *)
     echo "Unknown profile: $PROFILE" >&2

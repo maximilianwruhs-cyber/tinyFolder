@@ -2,6 +2,8 @@
 
 Quick reference for **common failures and fixes** when running tinyFolder/GZMO on **NVIDIA DGX Spark** (128 GB unified) with **Qwen 3.6 MoE** and desktop **Dropzone** ingest.
 
+**Reference inference model:** **`qwen3.6:35b-a3b-nvfp4`** (best overall in this repo when the tag runs on Blackwell). Fallback: **`qwen3.6:35b-a3b`**. Non-Spark workstations with ≈24 GB VRAM use the same Q4 tag — see [README — Recommended models](../README.md#recommended-models).
+
 This doc points to **official and community sources** on the web, then maps each issue to **GZMO-specific** checks. For generic GZMO issues (systemd `216/GROUP`, CRLF, golden task), see [README — Troubleshooting](../README.md#troubleshooting).
 
 ---

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # GZMO Onboard — hardware-aware setup wizard wrapper
 # Delegates to the TypeScript wizard inside gzmo-daemon/tools/
+# Model tiers: README.md → Recommended models (nvfp4 / qwen3.6:35b-a3b / hermes3:8b).
 #
 # Usage:
 #   ./scripts/onboard.sh              # interactive
