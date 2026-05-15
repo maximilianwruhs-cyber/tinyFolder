@@ -1,3 +1,5 @@
+import { readBoolEnv } from "./pipelines/helpers";
+
 export type GzmoProfileName = "heartbeat" | "minimal" | "standard" | "core" | "full" | "interactive";
 
 export interface RuntimeProfile {
@@ -18,19 +20,11 @@ export interface RuntimeProfile {
   enableDashboardPulse: boolean;
 }
 
-function readBoolEnv(name: string, defaultValue: boolean): boolean {
-  const raw = process.env[name];
-  if (raw === undefined) return defaultValue;
-  const v = raw.trim().toLowerCase();
-  if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
-  if (v === "0" || v === "false" || v === "no" || v === "off") return false;
-  return defaultValue;
-}
-
 function parseProfileName(raw?: string): GzmoProfileName {
   const v = (raw ?? "").trim().toLowerCase();
   if (v === "heartbeat") return "heartbeat";
   if (v === "minimal") return "minimal";
+  if (v === "core") return "core";
   if (v === "standard") return "standard";
   if (v === "interactive") return "interactive";
   return "full";
@@ -103,7 +97,7 @@ export function defaultRuntimeProfile(name: GzmoProfileName): RuntimeProfile {
       };
 
     case "interactive":
-      return defaultRuntimeProfile("core");
+      return { ...defaultRuntimeProfile("core"), name: "interactive" };
 
     case "full":
       return {
