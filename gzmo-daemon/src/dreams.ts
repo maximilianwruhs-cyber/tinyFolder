@@ -16,6 +16,7 @@ import type { ChaosSnapshot } from "./types";
 import type { EmbeddingStore } from "./embeddings";
 import { searchVault, formatSearchContext, type SearchResult } from "./search";
 import { atomicWriteJson, safeWriteText } from "./vault_fs";
+import { formatProvenanceYamlComment } from "./provenance_footer";
 import { createAutoInboxTasks, parseTypedNextAction, type AutoTaskSpec } from "./auto_tasks";
 import { parseStructuredDreamReflection } from "./structured";
 import { readAutoInboxFromDreams } from "./pipelines/helpers";
@@ -469,6 +470,16 @@ export class DreamEngine {
       "",
       "---",
       `*Crystallized autonomously by the GZMO Dream Engine at tick ${snap.tick}.*`,
+      formatProvenanceYamlComment({
+        subsystem: "dream",
+        model: process.env.OLLAMA_MODEL,
+        retrieval_query_id:
+          relatedFiles
+            .map((r) => r.file.replace(/\\/g, "/"))
+            .join("|")
+            .slice(0, 200) || undefined,
+        evidence_files: relatedFiles.map((r) => r.file.replace(/\\/g, "/")),
+      }),
     );
 
     await safeWriteText(this.vaultPath, filePath, content.join("\n"));

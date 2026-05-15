@@ -158,6 +158,12 @@ export function readBoolEnv(name: string, defaultValue: boolean): boolean {
   return defaultValue;
 }
 
+/** Think-task vault retrieval: default `off`; `light` when project-grounding heuristic matches; `on` always (if embeddings exist). */
+export function readThinkRetrievalTier(): "off" | "light" | "on" {
+  const raw = (process.env.GZMO_THINK_RETRIEVAL ?? "off").trim().toLowerCase();
+  return raw === "light" || raw === "on" ? raw : "off";
+}
+
 /** True when `GZMO_PROFILE=art` (case-insensitive). */
 export function isArtProfileEnv(): boolean {
   return (process.env.GZMO_PROFILE ?? "").trim().toLowerCase() === "art";

@@ -10,6 +10,7 @@ import { formatSearchCitations } from "../citation_formatter";
 import { verifySafety } from "../verifier_safety";
 import { selfEvalAndRewrite } from "../self_eval";
 import { buildSystemPrompt, readBoolEnv, readIntEnv, isProofTask, extractExplicitVaultMdPaths } from "./helpers";
+import { formatMemoryWorkingSet } from "../memory_working_set";
 import { buildGahClarification, shouldEvidenceGateHalt } from "../gah_gate";
 import { OUTPUTS_REGISTRY } from "../outputs_registry";
 import type { ToolCallRecord } from "../tools/types";
@@ -239,7 +240,9 @@ export class SearchPipeline implements TaskPipeline {
         gahMinScore,
       });
       if (gah.halt && gah.reason) {
-        const systemPrompt = buildSystemPrompt(pulse?.snapshot(), undefined, memory?.toPromptContext(), undefined);
+        const ws = await formatMemoryWorkingSet(vaultRoot).catch(() => "");
+        const mc = [memory?.toPromptContext(), ws].filter(Boolean).join("\n\n").trim();
+        const systemPrompt = buildSystemPrompt(pulse?.snapshot(), undefined, mc || undefined, undefined);
         return {
           vaultContext: "",
           systemPrompt,
@@ -328,8 +331,14 @@ export class SearchPipeline implements TaskPipeline {
     }
     
     const snap = pulse?.snapshot();
-    const memoryContext = memory?.toPromptContext();
-    const systemPrompt = buildSystemPrompt(snap, vaultContext, memoryContext, undefined);
+    const memoryContext = [
+      memory?.toPromptContext(),
+      await formatMemoryWorkingSet(vaultRoot).catch(() => ""),
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+    const systemPrompt = buildSystemPrompt(snap, vaultContext, memoryContext || undefined, undefined);
     
     return {
       vaultContext: vaultContext || "",

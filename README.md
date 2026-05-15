@@ -21,6 +21,7 @@ Agent checklist: [`AGENTS.md`](AGENTS.md).
 - [Bigger machine (DGX Spark)](#bigger-machine-dgx-spark--64gb-ram--quick-path)
 - [Fresh machine agentic bootstrap](#fresh-machine-agentic-bootstrap-recommended)
 - [Doctor (agentic readiness)](#doctor-agentic-readiness)
+- [Why GZMO is not a chatbot](#why-gzmo-is-not-a-chatbot)
 - [Mental model](#mental-model)
 - [Prerequisites](#prerequisites)
 - [Install](#install)
@@ -314,6 +315,14 @@ Notes:
 
 ---
 
+## Why GZMO is not a chatbot
+
+GZMO is closer to an **embedding-aware filesystem daemon**: tasks are Markdown files (`GZMO/Inbox/`); completions are appended in place; RAG retrieves **chunks** from your vault (`GZMO/embeddings.json`) rather than pretending the model “remembers everything.” Chaos/dream/autonomy loops still write **inspectable audits** (`Thought_Cabinet/`). That makes the workload **replayable**, **diffable**, and **local-first** compared to SaaS chats.
+
+To lean into retrieval + continuity without exploding token cost, tune [`GZMO_THINK_RETRIEVAL`](#configure-environment-variables), [`GZMO_TOPK`](#configure-environment-variables), and optional working-set excerpts (`GZMO_MEMORY_WORKING_*`). Named starter bundles live under [`contrib/env-modes/`](contrib/env-modes/).
+
+---
+
 ## Mental model
 
 ### Core contract (deterministic)
@@ -503,6 +512,26 @@ Most subsystems can be disabled (all accept `true/false/1/0`):
 - `GZMO_ENABLE_DASHBOARD_PULSE`
 - `GZMO_ENABLE_DROPZONE` — watch the Dropzone folder for loose files (default: `on` when the inbox watcher runs)
 - `GZMO_DROPZONE_DIR` — absolute path override for Dropzone (default: `$VAULT_PATH/GZMO/Dropzone`)
+
+**Wiki consolidation cluster cooldown** (reduces retry/quarantine churn when drafts fail gates; keyed in `GZMO/.gzmo_wiki_digest.json`):
+
+- **`GZMO_WIKI_CLUSTER_COOLDOWN`**: `on|off` — backoff failed cabinet clusters instead of retrying every wiki cycle (default: **`on`**)
+- **`GZMO_WIKI_CLUSTER_COOLDOWN_BASE_MIN`**: first backoff slice in minutes (default: **`15`**; clamped **1 … 1440**)
+- **`GZMO_WIKI_CLUSTER_COOLDOWN_MAX_HOURS`**: backoff cap as hours (default: **`24`**; clamped **1 … 168**)
+- **`GZMO_WIKI_CLUSTER_FAILURE_CAP`**: **`0`** = exponential backoff only; **`N>0`** = after **`N`** failures, sleep **30 days** until manual digest cleanup or **`GZMO_WIKI_CLUSTER_COOLDOWN=off`**
+
+**Task memory (`GZMO/memory.json`), think retrieval & working-set knobs**
+
+- **`GZMO_MEMORY_MAX_ENTRIES`**: episodic completions kept (default: **`5`**, clamped **1 … 50**)
+- **`GZMO_MEMORY_SUMMARY_CHARS`**: per-entry summary truncation (default: **`120`**, clamped **40 … 500**)
+- **`GZMO_THINK_RETRIEVAL`**: `off` \| `light` \| `on` — inject a bounded Evidence Packet into **think** tasks (default: **`off`**). **`light`** runs hybrid search only when the task looks vault-grounded (same heuristic as Project grounding).
+- **`GZMO_THINK_TOPK`** / **`GZMO_THINK_EVIDENCE_MAX_SNIPPETS`** / **`GZMO_THINK_EVIDENCE_MAX_CHARS`**: budget for think-time retrieval (defaults **3**, **6**, **900**)
+- **`GZMO_MEMORY_WORKING_SET`**: `off` \| `cabinet` \| `cabinet_wiki` — prepend short recency excerpts from `Thought_Cabinet/` (and optionally `wiki/`) into the memory block (default: **`off`**)
+- **`GZMO_MEMORY_WORKING_SET_MAX_FILES`**, **`GZMO_MEMORY_WORKING_SET_CHARS_PER_FILE`**: excerpt bounds (defaults **4** files × **400** chars each)
+
+**Autonomy backpressure**
+
+- **`GZMO_AUTONOMY_OPS_BUDGET_HOUR`**: combined cap on autonomy **writes/hour** (self-ask emits, crystallized dreams, wiki cycles counted per tick). **`0`** = unlimited (default). Digest: `GZMO/.gzmo_autonomy_budget.json`
 
 **Dropzone conversion** (local-only; no network in the convert path):
 
@@ -965,7 +994,7 @@ For ToT / latency methodology (benchmark harness), see [`docs/PERFORMANCE_BASELI
 
 ## Repo contents (what is public)
 
-`gzmo-daemon/` (includes [`.env.example`](gzmo-daemon/.env.example), [`.env.spark.example`](gzmo-daemon/.env.spark.example)), `scripts/` (includes [`setup.sh`](scripts/setup.sh) — see [Which installer?](#which-installer-human-vs-agent); other helpers include `boot-stack.sh`, `doctor-agentic.sh`, `push_learning_to_green.sh`, `start-ollama-optimized.sh`), `install_service.sh`, `README.md`, `AGENTS.md`, `LICENSE`, `.gitignore`, [`.gitattributes`](.gitattributes), [`.editorconfig`](.editorconfig), [`docs/`](docs/) (see [Additional documentation](#additional-documentation)), [`.pi/extensions/`](.pi/extensions/) (Pi extension + bundled `gzmo-daemon` skill; JS deps in [`package.json`](.pi/extensions/package.json) and lockfile **`bun.lock`** — run `bun install` in that directory when developing the extension), [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md) (optional shell/CI inbox helpers). Vault data stays local and is not in git.
+`gzmo-daemon/` (includes [`.env.example`](gzmo-daemon/.env.example), [`.env.spark.example`](gzmo-daemon/.env.spark.example)), `scripts/` (includes [`setup.sh`](scripts/setup.sh) — see [Which installer?](#which-installer-human-vs-agent); other helpers include `boot-stack.sh`, `doctor-agentic.sh`, `push_learning_to_green.sh`, `start-ollama-optimized.sh`), `install_service.sh`, `README.md`, `AGENTS.md`, `LICENSE`, `.gitignore`, [`.gitattributes`](.gitattributes), [`.editorconfig`](.editorconfig), [`docs/`](docs/) (see [Additional documentation](#additional-documentation)), [`contrib/env-modes/`](contrib/env-modes/README.md) (optional named `.env` fragments), [`.pi/extensions/`](.pi/extensions/) (Pi extension + bundled `gzmo-daemon` skill; JS deps in [`package.json`](.pi/extensions/package.json) and lockfile **`bun.lock`** — run `bun install` in that directory when developing the extension), [`contrib/pi-gzmo-skill/`](contrib/pi-gzmo-skill/README.md) (optional shell/CI inbox helpers). Vault data stays local and is not in git.
 
 ---
 

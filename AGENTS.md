@@ -34,6 +34,7 @@ Use [README.md — Table of contents](README.md#table-of-contents) as the canoni
 | Repeatable fresh-machine setup | [Fresh machine agentic bootstrap](README.md#fresh-machine-agentic-bootstrap-recommended) |
 | Doctor / readiness wrapper | [Doctor (agentic readiness)](README.md#doctor-agentic-readiness) |
 | How tasks work (mental model) | [Mental model](README.md#mental-model) |
+| Design philosophy (vault vs chat UX) | [Why GZMO is not a chatbot](README.md#why-gzmo-is-not-a-chatbot) · [`contrib/env-modes/`](contrib/env-modes/README.md) |
 | Bun, Ollama, models | [Prerequisites](README.md#prerequisites) → [Recommended models](README.md#recommended-models) |
 | `bun install` | [Install](README.md#install) |
 | Directory layout | [Create a vault scaffold](README.md#create-a-vault-scaffold) |

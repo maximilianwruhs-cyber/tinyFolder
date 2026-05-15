@@ -59,7 +59,8 @@ export const OUTPUTS_REGISTRY: OutputSpec[] = [
   { path: "GZMO/doctor-report.json", kind: "report", purpose: "Doctor run details (JSON).", writer: "doctor.ts", operation: "derives", writeMode: "atomic", cadence: "on-demand", format: "json" },
 
   { path: "GZMO/.gzmo_dreams_digested.json", kind: "digest", purpose: "Dream digest (which inbox tasks were distilled).", writer: "dreams.ts", operation: "maintains", writeMode: "atomic", cadence: "per dream", format: "json" },
-  { path: "GZMO/.gzmo_wiki_digest.json", kind: "digest", purpose: "Wiki digest (which cabinet entries were consolidated).", writer: "wiki_engine.ts", operation: "maintains", writeMode: "atomic", cadence: "per wiki cycle", format: "json" },
+  { path: "GZMO/.gzmo_wiki_digest.json", kind: "digest", purpose: "Wiki digest (consolidated cabinet paths + cooldown map for failed cluster retries).", writer: "wiki_engine.ts", operation: "maintains", writeMode: "atomic", cadence: "per wiki cycle", format: "json" },
+  { path: "GZMO/.gzmo_autonomy_budget.json", kind: "digest", purpose: "Hourly autonomy op counter for dreams/self-ask/wiki (see GZMO_AUTONOMY_OPS_BUDGET_HOUR).", writer: "autonomy_budget.ts", operation: "maintains", writeMode: "atomic", cadence: "hourly bucket", format: "json" },
   { path: "GZMO/.gzmo_ingest_digest.json", kind: "digest", purpose: "Ingest digest (which raw sources were summarized).", writer: "ingest_engine.ts", operation: "maintains", writeMode: "atomic", cadence: "per ingest cycle", format: "json" },
   { path: "GZMO/.gzmo_auto_tasks.json", kind: "digest", purpose: "Auto-task digest (stable ids + rate limiting).", writer: "auto_tasks.ts", operation: "maintains", writeMode: "atomic", cadence: "per auto-task", format: "json" },
 

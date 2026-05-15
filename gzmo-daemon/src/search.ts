@@ -179,7 +179,8 @@ export async function searchVault(
     /(?:^|[\s`"'(])docs\/[A-Za-z0-9_\-./]+\.md(?=$|[\s`"'),.;:!?])/i.test(query);
 
   // Embed the query
-  const doFetch = opts.fetchFn ?? globalThis.fetch;
+  const testFetch = (globalThis as { __GZMO_TEST_FETCH?: typeof fetch }).__GZMO_TEST_FETCH;
+  const doFetch = testFetch ?? opts.fetchFn ?? globalThis.fetch;
   const resp = await doFetch(`${ollamaUrl}/api/embeddings`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

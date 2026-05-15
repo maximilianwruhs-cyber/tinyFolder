@@ -37,6 +37,8 @@ import { extractEdgeCandidate, type EdgeStore } from "./honeypot_edges";
 import { validateEdgeCandidate } from "./linc_filter";
 import { normalizeOllamaV1BaseUrl } from "./inference";
 import { readAutoInboxFromSelfAsk } from "./pipelines/helpers";
+import { formatProvenanceYamlComment } from "./provenance_footer";
+import { autonomyBudgetAllows, autonomyBudgetConsume } from "./autonomy_budget";
 
 const OLLAMA_BASE_URL = normalizeOllamaV1BaseUrl(process.env.OLLAMA_URL);
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "hermes3:8b";
@@ -190,6 +192,11 @@ export class SelfAskEngine {
 
     if (store.chunks.length < 10) {
       console.log("[SELF-ASK] Skipped — vault too small for meaningful analysis");
+      return results;
+    }
+
+    if (!(await autonomyBudgetAllows(this.vaultPath))) {
+      console.log("[SELF-ASK] Skipped — GZMO_AUTONOMY_OPS_BUDGET_HOUR exhausted for this UTC hour");
       return results;
     }
 
@@ -618,9 +625,23 @@ export class SelfAskEngine {
       "",
       "---",
       `*Generated autonomously by the GZMO Self-Ask Engine (${strategy}).*`,
+      formatProvenanceYamlComment({
+        subsystem: "self_ask",
+        strategy,
+        model: OLLAMA_MODEL,
+        retrieval_query_id: packet?.snippets
+          ?.filter((s) => s.kind === "retrieval" && s.file)
+          .map((s) => s.file!)
+          .join("|")
+          .slice(0, 200) || undefined,
+        evidence_files: packet
+          ? [...new Set(packet.snippets.map((s) => s.file).filter((f): f is string => Boolean(f)))]
+          : undefined,
+      }),
     ].join("\n");
 
     await Bun.write(filepath, content);
+    await autonomyBudgetConsume(this.vaultPath, "self_ask").catch(() => {});
     console.log(`[SELF-ASK] Written: ${filename}`);
 
     // Emit canonical edge candidates for recursive honeypot layers.

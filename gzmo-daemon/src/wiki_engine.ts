@@ -32,6 +32,15 @@ import { compileEvidencePacket, renderEvidencePacket } from "./evidence_packet";
 import { selfEvalAndRewrite } from "./self_eval";
 import { verifySafety } from "./verifier_safety";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import {
+  CONSOLIDATION_FAILURE_CAP_DELAY_MS,
+  consolidationBackoffMinutes,
+  consolidationClusterKey,
+  consolidationCooldownActive,
+  parseConsolidationCooldowns,
+  type ConsolidationCooldownEntry,
+} from "./wiki_consolidation_cooldown";
+import { readBoolEnv, readIntEnv } from "./pipelines/helpers";
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434/v1";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "hermes3:8b";
@@ -51,6 +60,8 @@ interface WikiDigest {
   wikiPages: string[];          // Wiki pages created by this engine
   lastRun: string;              // ISO timestamp
   lastIntrospection: string;    // ISO timestamp of last system scan
+  /** Failed consolidation clusters → next retry wall time (digest backoff). */
+  consolidationCooldowns: Record<string, ConsolidationCooldownEntry>;
 }
 
 async function listCabinetMarkdownRecursive(cabinetAbs: string): Promise<string[]> {
@@ -111,6 +122,7 @@ export class WikiEngine {
       wikiPages: [],
       lastRun: "",
       lastIntrospection: "",
+      consolidationCooldowns: {},
     };
   }
 
@@ -128,6 +140,7 @@ export class WikiEngine {
           wikiPages: Array.isArray(rec.wikiPages) ? rec.wikiPages : [],
           lastRun: typeof rec.lastRun === "string" ? rec.lastRun : "",
           lastIntrospection: typeof rec.lastIntrospection === "string" ? rec.lastIntrospection : "",
+          consolidationCooldowns: parseConsolidationCooldowns(rec.consolidationCooldowns),
         };
       }
     } catch {
@@ -138,6 +151,40 @@ export class WikiEngine {
   private saveDigest(): void {
     // Digest is a structured artifact: write atomically and vault-safely.
     atomicWriteJson(this.vaultPath, this.digestPath, this.digest, 2).catch(() => {});
+  }
+
+  private wikiClusterCooldownEnabled(): boolean {
+    return readBoolEnv("GZMO_WIKI_CLUSTER_COOLDOWN", true);
+  }
+
+  private wikiCooldownParams(): { baseMin: number; maxHours: number; failureCap: number } {
+    return {
+      baseMin: readIntEnv("GZMO_WIKI_CLUSTER_COOLDOWN_BASE_MIN", 15, 1, 1440),
+      maxHours: readIntEnv("GZMO_WIKI_CLUSTER_COOLDOWN_MAX_HOURS", 24, 1, 168),
+      failureCap: readIntEnv("GZMO_WIKI_CLUSTER_FAILURE_CAP", 0, 0, 1000),
+    };
+  }
+
+  private recordConsolidationCooldownFailure(clusterKey: string, reason: string): void {
+    if (!this.wikiClusterCooldownEnabled()) return;
+    const prev = this.digest.consolidationCooldowns[clusterKey];
+    const failures = (prev?.failures ?? 0) + 1;
+    const { baseMin, maxHours, failureCap } = this.wikiCooldownParams();
+    let delayMs = consolidationBackoffMinutes(failures, baseMin, maxHours) * 60 * 1000;
+    if (failureCap > 0 && failures >= failureCap) {
+      delayMs = CONSOLIDATION_FAILURE_CAP_DELAY_MS;
+    }
+    this.digest.consolidationCooldowns[clusterKey] = {
+      failures,
+      nextRetryAt: new Date(Date.now() + delayMs).toISOString(),
+      lastReason: reason.slice(0, 240),
+    };
+    this.saveDigest();
+  }
+
+  private clearConsolidationCooldown(clusterKey: string): void {
+    if (!this.digest.consolidationCooldowns[clusterKey]) return;
+    delete this.digest.consolidationCooldowns[clusterKey];
   }
 
   /**
@@ -234,6 +281,18 @@ export class WikiEngine {
     for (const [category, catEntries] of categories) {
       if (catEntries.length < 3) continue; // Need at least 3 entries per cluster
 
+      const sortedPaths = [...catEntries.map((e) => e.file)].sort();
+      const clusterKey = consolidationClusterKey(category, sortedPaths);
+      if (this.wikiClusterCooldownEnabled()) {
+        const cd = this.digest.consolidationCooldowns[clusterKey];
+        if (cd && consolidationCooldownActive(cd.nextRetryAt)) {
+          console.log(
+            `[WIKI] Skipping cluster (cooldown): category=${category} failures=${cd.failures} until=${cd.nextRetryAt}`,
+          );
+          continue;
+        }
+      }
+
       console.log(`[WIKI] Consolidating ${catEntries.length} entries from category: ${category}`);
 
       // Build context from entries
@@ -305,7 +364,10 @@ Rules:
 
       try {
         let article = await infer(systemPrompt, promptWithTaskTypes);
-        if (article.length < 50) continue;
+        if (article.length < 50) {
+          this.recordConsolidationCooldownFailure(clusterKey, "too_short");
+          continue;
+        }
 
         // Optional verifier passes (cheap honesty boost).
         if (String(process.env.GZMO_ENABLE_SELF_EVAL ?? "on").toLowerCase() !== "off") {
@@ -348,6 +410,7 @@ Rules:
               suggestion: "Adjust the wiki consolidation prompt or add missing evidence/entry references, then re-run the wiki cycle.",
             }).catch(() => {});
           }
+          this.recordConsolidationCooldownFailure(clusterKey, qualityCheck.reason ?? "quality_gate");
           continue;
         }
 
@@ -402,6 +465,8 @@ Rules:
           this.digest.consolidated.push(entry.file);
         }
         this.digest.wikiPages.push(`${subDir}/${filename}`);
+        this.clearConsolidationCooldown(clusterKey);
+        this.saveDigest();
 
         results.push({
           wikiPath: wikiFilePath,
@@ -423,6 +488,7 @@ Rules:
         }).catch(() => {});
       } catch (err: any) {
         console.error(`[WIKI] Consolidation failed for ${category}: ${err?.message}`);
+        this.recordConsolidationCooldownFailure(clusterKey, err?.message ? `error:${String(err.message).slice(0, 120)}` : "error");
       }
     }
 

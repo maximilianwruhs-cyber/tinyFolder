@@ -41,6 +41,9 @@ import { startVramProbe, stopVramProbe } from "./src/vram_probe";
 import { loadConfig } from "./src/config";
 import { TaskDocument } from "./src/frontmatter";
 import { writeBootReport } from "./src/boot_report";
+import { formatRetrievalContextHint } from "./src/retrieval_context_hint";
+import { formatProvenanceYamlComment } from "./src/provenance_footer";
+import { autonomyBudgetAllows, autonomyBudgetConsume } from "./src/autonomy_budget";
 import { ensureDropzoneScaffold, resolveDropzoneRoot } from "./src/dropzone_paths";
 
 // Rate-limited warnings so a persistent disk/permission error doesn't spam logs.
@@ -95,7 +98,10 @@ console.log(`  Ollama: ${OLLAMA_API_URL}`);
 console.log(`  Profile:${describeRuntimeProfile(runtime)}`);
 console.log("═══════════════════════════════════════════════");
 
-void writeBootReport(VAULT_PATH, { profile: config.profile }).catch(() => {});
+void writeBootReport(VAULT_PATH, {
+  profile: config.profile,
+  retrieval_context: formatRetrievalContextHint(),
+}).catch(() => {});
 
 // Defaults for the "max finesse" retrieval stack (can be overridden by env).
 process.env.GZMO_MULTIQUERY ??= "on";
@@ -192,6 +198,10 @@ if (needsPulse) {
        "",
        "---",
        `*The Lorenz attractor's trajectory has been permanently altered.*`,
+       formatProvenanceYamlComment({
+         subsystem: "crystallization",
+         model: config.ollamaModel,
+       }),
      ].join("\n");
      safeWriteText(VAULT_PATH, filepath, content).catch((err) => {
        warnEvery(
@@ -465,12 +475,17 @@ if (runtime.enableDreams) {
     const snap = pulse.snapshot();
     if (!snap.alive || snap.energy < 20) return;
     try {
-      const result = await dreamsModule.engine.dream(snap, infer, embeddings.getStore() ?? undefined, OLLAMA_API_URL);
-      if (result) {
-        stream.log(`🌙 Dream crystallized from **${result.taskFile}**`);
-        pulse.emitEvent({ type: "dream_proposed", dreamText: result.insights.slice(0, 200) });
-        if (embeddings.getStore()) {
-          embeddings.enqueueUpsertFile(`GZMO/Thought_Cabinet/${basename(result.vaultPath)}`);
+      if (!(await autonomyBudgetAllows(VAULT_PATH))) {
+        console.log("[DREAM] Skipped — autonomy budget exhausted for this UTC hour");
+      } else {
+        const result = await dreamsModule.engine.dream(snap, infer, embeddings.getStore() ?? undefined, OLLAMA_API_URL);
+        if (result) {
+          stream.log(`🌙 Dream crystallized from **${result.taskFile}**`);
+          pulse.emitEvent({ type: "dream_proposed", dreamText: result.insights.slice(0, 200) });
+          if (embeddings.getStore()) {
+            embeddings.enqueueUpsertFile(`GZMO/Thought_Cabinet/${basename(result.vaultPath)}`);
+          }
+          await autonomyBudgetConsume(VAULT_PATH, "dream").catch(() => {});
         }
       }
     } catch (err: any) {
@@ -527,13 +542,18 @@ if (runtime.enableWiki) {
     const snap = pulse.snapshot();
     if (!snap.alive || snap.energy < 25) return;
     try {
-      const results = await wikiEngineInstance.cycle(infer, embeddings.getStore() ?? undefined, OLLAMA_API_URL);
-      for (const result of results) {
-        stream.log(`📖 Wiki created: **${result.title}**`);
-        pulse.emitEvent({ type: "wiki_consolidated", pageTitle: result.title });
-        if (embeddings.getStore()) {
-          embeddings.enqueueUpsertFile(result.wikiPath.replace(VAULT_PATH + "/", ""));
+      if (!(await autonomyBudgetAllows(VAULT_PATH))) {
+        console.log("[WIKI] Skipped — autonomy budget exhausted for this UTC hour");
+      } else {
+        const results = await wikiEngineInstance.cycle(infer, embeddings.getStore() ?? undefined, OLLAMA_API_URL);
+        for (const result of results) {
+          stream.log(`📖 Wiki created: **${result.title}**`);
+          pulse.emitEvent({ type: "wiki_consolidated", pageTitle: result.title });
+          if (embeddings.getStore()) {
+            embeddings.enqueueUpsertFile(result.wikiPath.replace(VAULT_PATH + "/", ""));
+          }
         }
+        await autonomyBudgetConsume(VAULT_PATH, "wiki").catch(() => {});
       }
     } catch (err: any) {
       console.error(`[WIKI] Error: ${err?.message}`);

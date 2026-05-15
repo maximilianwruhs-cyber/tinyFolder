@@ -583,7 +583,12 @@ export async function processTask(
       }
     }
 
-    if (!usedDeterministic && action !== "search" && ctx.state.projectAllowedPaths?.length > 0) {
+    if (
+      !usedDeterministic &&
+      action !== "search" &&
+      ctx.state.projectAllowedPaths?.length > 0 &&
+      !ctx.state.evidencePacket
+    ) {
       const verdict = spanSync("safety.verify.nonsearch", () => verifySafety({
         answer: fullText,
         packet: { snippets: [{ id: "E1", kind: "local_facts", text: ctx.state.projectGrounding || "" }], allowedPaths: ctx.state.projectAllowedPaths },
