@@ -1,5 +1,7 @@
 # AGENTS — tinyFolder / GZMO
 
+> **Archived.** Use **[gzmo_tinyFolder](https://github.com/maximilianwruhs-cyber/gzmo_tinyFolder)** and its [`AGENTS.md`](https://github.com/maximilianwruhs-cyber/gzmo_tinyFolder/blob/main/AGENTS.md) for new work.
+
 This file is the **control tower** for coding agents. It states non‑negotiables, the **order in which to use [README.md](README.md)**, and deep links into that playbook. **Do not skip README** for examples, full env var lists, or task YAML—open the linked section.
 
 ---

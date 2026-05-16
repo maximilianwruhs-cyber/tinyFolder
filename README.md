@@ -1,5 +1,7 @@
 ## tinyFolder
 
+> **Archived.** Active development is in **[GZMO (gzmo_tinyFolder)](https://github.com/maximilianwruhs-cyber/gzmo_tinyFolder)** — core daemon + optional plugins, hardware-based install. This repo is frozen at tag [`archive/pre-core-plugins`](https://github.com/maximilianwruhs-cyber/tinyFolder/releases/tag/archive%2Fpre-core-plugins) for history only.
+
 GZMO daemon (**Bun** + **Ollama**): vault Markdown inbox tasks (`think` / `search` / `chain`). Files land in a **vault**; users drop documents on the **Desktop Dropzone**; the local LLM answers with **`[E#]` evidence** from ingested notes.
 
 | Machine | Inference model | Profile | Config template |

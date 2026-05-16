@@ -76,3 +76,4 @@ gzmo-daemon/doctor-report.*
 .DS_Store
 .idea/
 .vscode/
+.cursor/
